@@ -4,6 +4,7 @@ A declarative XML UI engine for [LVGL](https://lvgl.io) 9.5+. Loads components, 
 subjects and data bindings from XML at runtime — no code generation, no build step.
 
 **License:** MIT. See [`LICENSE`](LICENSE).
+**Home:** https://github.com/prestonbrown/helix-xml — issues and roadmap live there.
 
 ## Provenance
 

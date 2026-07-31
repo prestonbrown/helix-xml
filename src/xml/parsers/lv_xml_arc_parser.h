@@ -1,6 +1,8 @@
 /**
  * @file lv_xml_arc_parser.h
  *
+ * SPDX-License-Identifier: MIT
+ * SPDX-FileCopyrightText: 2025 LVGL Kft
  */
 
 #ifndef LV_XML_ARC_PARSER_H

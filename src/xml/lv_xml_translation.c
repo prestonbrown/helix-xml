@@ -1,12 +1,15 @@
 /**
  * @file lv_xml_translation.c
  *
+ * SPDX-License-Identifier: MIT
+ * SPDX-FileCopyrightText: 2025 LVGL Kft
+ * SPDX-FileCopyrightText: 2026 356C LLC
  */
 
 /*********************
  *      INCLUDES
  *********************/
-#include "../../lvgl.h"
+#include <lvgl.h>
 #if LV_USE_XML && LV_USE_TRANSLATION
 
 #include "../others/translation/lv_translation_private.h"

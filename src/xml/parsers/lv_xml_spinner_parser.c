@@ -1,6 +1,9 @@
 /**
  * @file lv_xml_spinner_parser.c
  *
+ * SPDX-License-Identifier: MIT
+ * SPDX-FileCopyrightText: 2025 LVGL Kft
+ * SPDX-FileCopyrightText: 2026 356C LLC
  */
 
 /*********************
@@ -10,8 +13,9 @@
 #include "lv_xml_spinner_parser.h"
 #if LV_USE_XML && LV_USE_SPINNER
 
-#include "../../../lvgl.h"
-#include "../../../lvgl_private.h"
+#include <lvgl.h>
+#include <lvgl_private.h>
+#include "../lv_xml_private.h"
 
 /*********************
  *      DEFINES

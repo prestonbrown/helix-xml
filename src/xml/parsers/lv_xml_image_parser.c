@@ -1,6 +1,9 @@
 /**
  * @file lv_xml_image_parser.c
  *
+ * SPDX-License-Identifier: MIT
+ * SPDX-FileCopyrightText: 2025 LVGL Kft
+ * SPDX-FileCopyrightText: 2026 356C LLC
  */
 
 /*********************
@@ -9,8 +12,9 @@
 #include "lv_xml_image_parser.h"
 #if LV_USE_XML && LV_USE_IMAGE
 
-#include "../../../lvgl.h"
-#include "../../../lvgl_private.h"
+#include <lvgl.h>
+#include <lvgl_private.h>
+#include "../lv_xml_private.h"
 
 /*********************
  *      DEFINES
@@ -24,6 +28,7 @@
  *  STATIC PROTOTYPES
  **********************/
 static lv_image_align_t image_align_to_enum(const char * txt);
+static void image_string_src_observer_cb(lv_observer_t * observer, lv_subject_t * subject);
 
 /**********************
  *  STATIC VARIABLES
@@ -70,7 +75,17 @@ void lv_xml_image_apply(lv_xml_parser_state_t * state, const char ** attrs)
         else if(lv_streq("bind_src", name)) {
             lv_subject_t * subject = lv_xml_get_subject(&state->scope, value);
             if(subject) {
-                lv_image_bind_src(item, subject);
+                /* LVGL's lv_image_bind_src only handles POINTER subjects. STRING
+                 * subjects (the common case for thumbnail-path bindings) are
+                 * rejected with a warning, leaving the static src= as a stale
+                 * fallback. Route STRING subjects through our own observer so
+                 * bind_src works uniformly with both types. */
+                if(subject->type == LV_SUBJECT_TYPE_STRING) {
+                    lv_subject_add_observer_obj(subject, image_string_src_observer_cb, item, NULL);
+                }
+                else {
+                    lv_image_bind_src(item, subject);
+                }
             }
             else {
                 LV_LOG_WARN("Subject \"%s\" doesn't exist in image bind_src", value);
@@ -96,9 +111,20 @@ static lv_image_align_t image_align_to_enum(const char * txt)
     if(lv_streq("center", txt)) return LV_IMAGE_ALIGN_CENTER;
     if(lv_streq("stretch", txt)) return LV_IMAGE_ALIGN_STRETCH;
     if(lv_streq("tile", txt)) return LV_IMAGE_ALIGN_TILE;
+    if(lv_streq("contain", txt)) return LV_IMAGE_ALIGN_CONTAIN;
+    if(lv_streq("cover", txt)) return LV_IMAGE_ALIGN_COVER;
 
     LV_LOG_WARN("%s is an unknown value for image align", txt);
     return 0; /*Return 0 in lack of a better option. */
+}
+
+static void image_string_src_observer_cb(lv_observer_t * observer, lv_subject_t * subject)
+{
+    /* Empty string leaves the existing src untouched so the XML-defined static
+     * `src=` keeps acting as a fallback when the subject hasn't been populated. */
+    const char * path = lv_subject_get_string(subject);
+    if(path == NULL || path[0] == '\0') return;
+    lv_image_set_src((lv_obj_t *)observer->target, path);
 }
 
 

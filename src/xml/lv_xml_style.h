@@ -1,6 +1,9 @@
 /**
  * @file lv_xml_style.h
  *
+ * SPDX-License-Identifier: MIT
+ * SPDX-FileCopyrightText: 2025 LVGL Kft
+ * SPDX-FileCopyrightText: 2026 356C LLC
  */
 
 #ifndef LV_XML_STYLE_H
@@ -14,6 +17,7 @@ extern "C" {
  *      INCLUDES
  *********************/
 #include "../misc/lv_types.h"
+#include "lv_xml_types.h"
 #include "../misc/lv_style.h"
 #include "../core/lv_obj_style.h"
 

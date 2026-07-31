@@ -1,6 +1,9 @@
 /**
  * @file lv_xml_update.c
  *
+ * SPDX-License-Identifier: MIT
+ * SPDX-FileCopyrightText: 2025 LVGL Kft
+ * SPDX-FileCopyrightText: 2026 356C LLC
  */
 
 /*********************
@@ -9,7 +12,7 @@
 #include "lv_xml_update.h"
 #if LV_USE_XML &&  LV_USE_OBJ_NAME
 
-#include "../lvgl.h"
+#include <lvgl.h>
 #include "lv_xml_widget.h"
 #include "lv_xml_parser.h"
 #include "../libs/expat/expat.h"

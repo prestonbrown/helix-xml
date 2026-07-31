@@ -1,6 +1,9 @@
 /**
  * @file lv_xml_textarea_parser.c
  *
+ * SPDX-License-Identifier: MIT
+ * SPDX-FileCopyrightText: 2025 LVGL Kft
+ * SPDX-FileCopyrightText: 2026 356C LLC
  */
 
 /*********************
@@ -9,8 +12,9 @@
 #include "lv_xml_textarea_parser.h"
 #if LV_USE_XML && LV_USE_TEXTAREA
 
-#include "../../../lvgl.h"
-#include "../../../lvgl_private.h"
+#include <lvgl.h>
+#include <lvgl_private.h>
+#include "../lv_xml_private.h"
 
 /*********************
  *      DEFINES
@@ -57,6 +61,13 @@ void lv_xml_textarea_apply(lv_xml_parser_state_t * state, const char ** attrs)
 
         if(lv_streq("text", name)) lv_textarea_set_text(item, value);
         else if(lv_streq("placeholder_text", name)) lv_textarea_set_placeholder_text(item, value);
+#if LV_USE_TRANSLATION
+        /* placeholder_tag: translate the placeholder through the active language
+         * pack (mirrors lv_label's translation_tag). Place it after placeholder_text
+         * in the XML so it wins when both are present. Resolved at parse time, which
+         * is sufficient because inputs live in modals/wizards recreated on each open. */
+        else if(lv_streq("placeholder_tag", name)) lv_textarea_set_placeholder_text(item, lv_tr(value));
+#endif
         else if(lv_streq("one_line", name)) lv_textarea_set_one_line(item, lv_xml_to_bool(value));
         else if(lv_streq("password_mode", name)) lv_textarea_set_password_mode(item, lv_xml_to_bool(value));
         else if(lv_streq("password_show_time", name)) lv_textarea_set_password_show_time(item, lv_xml_atoi(value));

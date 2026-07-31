@@ -1,6 +1,9 @@
 /**
  * @file lv_xml_widget.h
  *
+ * SPDX-License-Identifier: MIT
+ * SPDX-FileCopyrightText: 2025 LVGL Kft
+ * SPDX-FileCopyrightText: 2026 356C LLC
  */
 
 #ifndef LV_XML_WIDGET_H
@@ -14,6 +17,7 @@ extern "C" {
  *      INCLUDES
  *********************/
 #include "../misc/lv_types.h"
+#include "lv_xml_types.h"
 #if LV_USE_XML
 
 #include "lv_xml_utils.h"

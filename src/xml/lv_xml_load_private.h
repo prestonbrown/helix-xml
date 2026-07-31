@@ -1,6 +1,8 @@
 /**
  * @file lv_xml_load_private.h
  *
+ * SPDX-License-Identifier: MIT
+ * SPDX-FileCopyrightText: 2025 LVGL Kft
  */
 
 #ifndef LV_XML_LOAD_PRIVATE_H

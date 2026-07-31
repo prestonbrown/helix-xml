@@ -1,6 +1,9 @@
 /**
  * @file lv_xml_test.h
  *
+ * SPDX-License-Identifier: MIT
+ * SPDX-FileCopyrightText: 2025 LVGL Kft
+ * SPDX-FileCopyrightText: 2026 356C LLC
  */
 
 #ifndef LV_XML_TEST_H
@@ -58,7 +61,7 @@ lv_result_t lv_xml_test_register_from_file(const char * path, const char * ref_i
 /**
  * Free resources allocated for testing.
  */
-void lv_xml_unregister_test(void);
+void lv_xml_test_unregister(void);
 
 /**
  * Switch to testing mode. Needs to be called to use `lv_xml_test_run_next()`

@@ -1,6 +1,9 @@
 /**
  * @file lv_xml_component.h
  *
+ * SPDX-License-Identifier: MIT
+ * SPDX-FileCopyrightText: 2025 LVGL Kft
+ * SPDX-FileCopyrightText: 2026 356C LLC
  */
 
 #ifndef LV_XML_COMPONENT_H
@@ -14,6 +17,7 @@ extern "C" {
  *      INCLUDES
  *********************/
 #include "../misc/lv_types.h"
+#include "lv_xml_types.h"
 #if LV_USE_XML
 
 /**********************
@@ -57,11 +61,29 @@ lv_result_t lv_xml_register_component_from_file(const char * path);
 lv_xml_component_scope_t * lv_xml_component_get_scope(const char * component_name);
 
 /**
+ * Callback for `lv_xml_component_foreach`, invoked once per registered scope.
+ * @param name       the component/scope name (the built-in "globals" scope is included)
+ * @param user_data  the opaque pointer passed to `lv_xml_component_foreach`
+ */
+typedef void (*lv_xml_component_iter_cb_t)(const char * name, void * user_data);
+
+/**
+ * Iterate every registered component scope, invoking `cb` with each scope name.
+ * The registry has only register + get-by-name accessors otherwise; this is the
+ * enumeration primitive. Order is most-recently-registered first. The built-in
+ * "globals" scope is included — callers wanting only real components should skip
+ * it by name.
+ * @param cb          callback invoked per scope (no-op if NULL)
+ * @param user_data   opaque pointer forwarded to every `cb` invocation
+ */
+void lv_xml_component_foreach(lv_xml_component_iter_cb_t cb, void * user_data);
+
+/**
  * Remove a component from from the list.
  * @param name      the name of the component (used during registration)
  * @return          LV_RESULT_OK on successful  unregistration, LV_RESULT_INVALID otherwise.
  */
-lv_result_t lv_xml_unregister_component(const char * name);
+lv_result_t lv_xml_component_unregister(const char * name);
 
 /**********************
  *      MACROS

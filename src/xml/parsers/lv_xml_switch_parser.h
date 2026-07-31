@@ -1,6 +1,8 @@
 /**
  * @file lv_xml_switch_parser.h
  *
+ * SPDX-License-Identifier: MIT
+ * SPDX-FileCopyrightText: 2025 LVGL Kft
  */
 
 #ifndef LV_XML_SWITCH_PARSER_H

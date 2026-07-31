@@ -1,6 +1,8 @@
 /**
  * @file lv_xml_update.h
  *
+ * SPDX-License-Identifier: MIT
+ * SPDX-FileCopyrightText: 2025 LVGL Kft
  */
 
 #ifndef LV_XML_UPDATE_H

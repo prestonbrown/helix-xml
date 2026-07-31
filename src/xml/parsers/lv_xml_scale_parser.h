@@ -1,6 +1,8 @@
 /**
  * @file lv_xml_scale_parser.h
  *
+ * SPDX-License-Identifier: MIT
+ * SPDX-FileCopyrightText: 2025 LVGL Kft
  */
 
 #ifndef LV_XML_SCALE_PARSER_H

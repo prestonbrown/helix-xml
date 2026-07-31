@@ -1,6 +1,9 @@
 /**
  * @file lv_xml_obj_parser.h
  *
+ * SPDX-License-Identifier: MIT
+ * SPDX-FileCopyrightText: 2025 LVGL Kft
+ * SPDX-FileCopyrightText: 2026 356C LLC
  */
 
 #ifndef LV_XML_OBJ_PARSER_H
@@ -51,14 +54,26 @@ void lv_obj_xml_subject_increment_apply(lv_xml_parser_state_t * state, const cha
 void * lv_obj_xml_bind_style_create(lv_xml_parser_state_t * state, const char ** attrs);
 void lv_obj_xml_bind_style_apply(lv_xml_parser_state_t * state, const char ** attrs);
 
+void * lv_obj_xml_bind_style_cmp_create(lv_xml_parser_state_t * state, const char ** attrs);
+void lv_obj_xml_bind_style_cmp_apply(lv_xml_parser_state_t * state, const char ** attrs);
+
 void * lv_obj_xml_bind_style_prop_create(lv_xml_parser_state_t * state, const char ** attrs);
 void lv_obj_xml_bind_style_prop_apply(lv_xml_parser_state_t * state, const char ** attrs);
 
 void * lv_obj_xml_bind_flag_create(lv_xml_parser_state_t * state, const char ** attrs);
 void lv_obj_xml_bind_flag_apply(lv_xml_parser_state_t * state, const char ** attrs);
 
+void * lv_obj_xml_bind_flag_if_create(lv_xml_parser_state_t * state, const char ** attrs);
+void lv_obj_xml_bind_flag_if_apply(lv_xml_parser_state_t * state, const char ** attrs);
+
 void * lv_obj_xml_bind_state_create(lv_xml_parser_state_t * state, const char ** attrs);
 void lv_obj_xml_bind_state_apply(lv_xml_parser_state_t * state, const char ** attrs);
+
+void * lv_obj_xml_bind_state_if_create(lv_xml_parser_state_t * state, const char ** attrs);
+void lv_obj_xml_bind_state_if_apply(lv_xml_parser_state_t * state, const char ** attrs);
+
+void * lv_obj_xml_bind_style_if_create(lv_xml_parser_state_t * state, const char ** attrs);
+void lv_obj_xml_bind_style_if_apply(lv_xml_parser_state_t * state, const char ** attrs);
 
 void * lv_obj_xml_screen_load_event_create(lv_xml_parser_state_t * state, const char ** attrs);
 void lv_obj_xml_screen_load_event_apply(lv_xml_parser_state_t * state, const char ** attrs);

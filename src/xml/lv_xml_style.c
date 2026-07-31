@@ -1,12 +1,15 @@
 /**
  * @file lv_xml_style.c
  *
+ * SPDX-License-Identifier: MIT
+ * SPDX-FileCopyrightText: 2025 LVGL Kft
+ * SPDX-FileCopyrightText: 2026 356C LLC
  */
 
 /*********************
  *      INCLUDES
  *********************/
-#include "../../lvgl.h"
+#include <lvgl.h>
 #if LV_USE_XML
 
 #include "lv_xml_base_types.h"
@@ -73,6 +76,10 @@ lv_result_t lv_xml_register_style(lv_xml_component_scope_t * scope, const char *
 
     if(!found) {
         xml_style = lv_ll_ins_tail(&scope->style_ll);
+        /* lv_ll_ins_tail returns uninitialised storage; zero it before use so
+         * lv_style_init's LV_USE_ASSERT_STYLE check doesn't read an uninitialised
+         * sentinel/prop_cnt (and name/long_name start from a known state). */
+        lv_memzero(xml_style, sizeof(*xml_style));
         xml_style->name = lv_strdup(style_name);
         lv_style_init(&xml_style->style);
         size_t long_name_len = lv_strlen(scope->name) + 1 + lv_strlen(style_name) + 1;
@@ -252,8 +259,8 @@ lv_result_t lv_xml_register_style(lv_xml_component_scope_t * scope, const char *
         else SET_STYLE_IF(blend_mode, lv_xml_blend_mode_to_enum(value));
         else SET_STYLE_IF(transform_width, lv_xml_atoi(value));
         else SET_STYLE_IF(transform_height, lv_xml_atoi(value));
-        else SET_STYLE_IF(translate_x, lv_xml_atoi(value));
-        else SET_STYLE_IF(translate_y, lv_xml_atoi(value));
+        else SET_STYLE_IF(translate_x, lv_xml_to_size(value));
+        else SET_STYLE_IF(translate_y, lv_xml_to_size(value));
         else SET_STYLE_IF(translate_radial, lv_xml_atoi(value));
         else SET_STYLE_IF(transform_scale_x, lv_xml_atoi(value));
         else SET_STYLE_IF(transform_scale_y, lv_xml_atoi(value));
@@ -357,6 +364,11 @@ lv_xml_style_t * lv_xml_get_style_by_name(lv_xml_component_scope_t * scope, cons
     if(style_name) {
         char component_name[256];
         size_t len = (size_t)(style_name - style_name_raw);
+        if(len >= sizeof(component_name)) {
+            LV_LOG_WARN("style reference '%s' has an over-long component name; ignoring",
+                        style_name_raw);
+            return NULL;
+        }
         lv_memcpy(component_name, style_name_raw, len);
         component_name[len] = '\0';
         scope = lv_xml_component_get_scope(component_name);

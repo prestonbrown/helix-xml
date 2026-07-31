@@ -1,6 +1,9 @@
 /**
  * @file lv_xml_arc_parser.c
  *
+ * SPDX-License-Identifier: MIT
+ * SPDX-FileCopyrightText: 2025 LVGL Kft
+ * SPDX-FileCopyrightText: 2026 356C LLC
  */
 
 /*********************
@@ -9,8 +12,9 @@
 #include "lv_xml_arc_parser.h"
 #if LV_USE_XML && LV_USE_ARC
 
-#include "../../../lvgl.h"
-#include "../../../lvgl_private.h"
+#include <lvgl.h>
+#include <lvgl_private.h>
+#include "../lv_xml_private.h"
 
 /*********************
  *      DEFINES
@@ -64,12 +68,20 @@ void lv_xml_arc_apply(lv_xml_parser_state_t * state, const char ** attrs)
         else if(lv_streq("max_value", name)) lv_arc_set_max_value(item, lv_xml_atoi(value));
         else if(lv_streq("mode", name)) lv_arc_set_mode(item, mode_text_to_enum_value(value));
         else if(lv_streq("bind_value", name)) {
-            lv_subject_t * subject = lv_xml_get_subject(&state->scope, value);
-            if(subject) {
-                lv_arc_bind_value(item, subject);
-            }
-            else {
-                LV_LOG_WARN("Subject \"%s\" doesn't exist in arc bind_value", value);
+            /* Empty/missing bind_value means "unset" — a component prop that
+             * defaults to "". The host app registers a no-op subject under the
+             * "" name to silence warnings, but lv_arc_bind_value is a two-way
+             * binding: every arc that bound to that shared subject would mirror
+             * each other's value (drag one fan dial, all of them follow). Skip
+             * the bind entirely when no real subject name was given. */
+            if(value && value[0] != '\0') {
+                lv_subject_t * subject = lv_xml_get_subject(&state->scope, value);
+                if(subject) {
+                    lv_arc_bind_value(item, subject);
+                }
+                else {
+                    LV_LOG_WARN("Subject \"%s\" doesn't exist in arc bind_value", value);
+                }
             }
         }
     }

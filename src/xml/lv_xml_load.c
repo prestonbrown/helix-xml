@@ -1,6 +1,9 @@
 /**
  * @file lv_xml_load.c
  *
+ * SPDX-License-Identifier: MIT
+ * SPDX-FileCopyrightText: 2025 LVGL Kft
+ * SPDX-FileCopyrightText: 2026 356C LLC
  */
 
 /*********************
@@ -11,7 +14,6 @@
 #if LV_USE_XML
 
 #include "lv_xml_private.h"
-#include "../core/lv_global.h"
 #include "../misc/lv_fs.h"
 #include "../libs/fsdrv/lv_fsdrv.h"
 #include "../misc/lv_ll.h"
@@ -21,7 +23,8 @@
  *      DEFINES
  *********************/
 
-#define xml_loads LV_GLOBAL_DEFAULT()->xml_loads
+#include "lv_xml_globals.h"
+#define xml_loads lv_xml_loads_ll
 #define PATH_PREFIX_BUF_SIZE 32
 #define PATH_PREFIX_FMT      "__LV_XML_%p"
 

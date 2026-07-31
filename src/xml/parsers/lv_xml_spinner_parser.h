@@ -1,6 +1,8 @@
 /**
  * @file lv_xml_spinner_parser.h
  *
+ * SPDX-License-Identifier: MIT
+ * SPDX-FileCopyrightText: 2025 LVGL Kft
  */
 
 #ifndef LV_XML_SPINNER_PARSER_H

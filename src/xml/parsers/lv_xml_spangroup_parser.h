@@ -1,6 +1,8 @@
 /**
  * @file lv_xml_spangroup_parser.h
  *
+ * SPDX-License-Identifier: MIT
+ * SPDX-FileCopyrightText: 2025 LVGL Kft
  */
 
 #ifndef LV_XML_SPANGROUP_PARSER_H

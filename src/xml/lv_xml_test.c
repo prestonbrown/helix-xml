@@ -1,6 +1,9 @@
 /**
  * @file lv_xml_test.c
  *
+ * SPDX-License-Identifier: MIT
+ * SPDX-FileCopyrightText: 2025 LVGL Kft
+ * SPDX-FileCopyrightText: 2026 356C LLC
  */
 
 /*********************
@@ -9,7 +12,7 @@
 #include "lv_xml_test.h"
 #if LV_USE_XML && LV_USE_TEST
 
-#include "../../lvgl.h"
+#include <lvgl.h>
 #include "lv_xml.h"
 #include "lv_xml_utils.h"
 #include "lv_xml_component_private.h"
@@ -98,7 +101,7 @@ static lv_tick_get_cb_t tick_cb_original;
 lv_result_t lv_xml_test_register_from_data(const char * xml_def, const char * ref_image_path_prefix)
 {
     /*Cleanup the previous test*/
-    lv_xml_unregister_test();
+    lv_xml_test_unregister();
 
     test.ref_image_path_prefix = ref_image_path_prefix;
 
@@ -181,7 +184,7 @@ lv_result_t lv_xml_test_register_from_file(const char * path, const char * ref_i
     return res;
 }
 
-void lv_xml_unregister_test(void)
+void lv_xml_test_unregister(void)
 {
     uint32_t i;
     for(i = 0; i < test.step_cnt; i++) {

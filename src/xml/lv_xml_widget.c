@@ -1,6 +1,8 @@
 /**
  * @file lv_xml_widget.c
  *
+ * SPDX-License-Identifier: MIT
+ * SPDX-FileCopyrightText: 2025 LVGL Kft
  */
 
 /*********************

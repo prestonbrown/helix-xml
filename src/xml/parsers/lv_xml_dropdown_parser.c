@@ -16,7 +16,7 @@
 #include <lvgl_private.h>
 #include "../lv_xml_private.h"
 #if LV_USE_TRANSLATION
-    #include "../../others/translation/lv_translation.h"
+    #include <others/translation/lv_translation.h>
 #endif
 
 /*********************

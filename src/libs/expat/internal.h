@@ -55,7 +55,7 @@
    USE OR OTHER DEALINGS IN THE SOFTWARE.
 */
 
-#include "../../lv_conf_internal.h"
+#include <lv_conf_internal.h>
 #if LV_USE_XML
 
 #if defined(__GNUC__) && defined(__i386__) && ! defined(__MINGW32__)

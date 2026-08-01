@@ -15,8 +15,8 @@
 extern "C" {
 #endif
 
-#include "../misc/lv_types.h"
-#include "../misc/lv_ll.h"
+#include <misc/lv_types.h>
+#include <misc/lv_ll.h>
 
 extern char * lv_xml_path_prefix;
 extern uint32_t     lv_xml_event_store_timeline;

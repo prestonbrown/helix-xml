@@ -21,7 +21,7 @@
 #include "lv_xml_widget.h"
 #include "parsers/lv_xml_obj_parser.h"
 #include "../libs/expat/expat.h"
-#include "../misc/lv_fs.h"
+#include <misc/lv_fs.h>
 #include "lv_xml_expr.h"
 #include <string.h>
 

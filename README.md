@@ -64,13 +64,63 @@ Features added here that upstream's engine does not have:
 | `float` and `color` subjects | Upstream supports only `int` and `string` |
 | `<subject name= type= value=>` | Single-tag subject declarations (upstream's tag-per-type form also parses) |
 
-## Usage in HelixScreen
+## Building it into a project
 
-Built directly into the binary — not a submodule, not patched. Edit the sources in place.
+helix-xml is source you compile alongside LVGL — there is no build system here, deliberately.
+It needs LVGL **9.5 or newer** (9.5 is the first release with no XML of its own, so nothing
+collides).
 
-- Pure C. Must not include or call app-layer C++.
+**Sources to compile:**
+
+```
+src/xml/*.c
+src/xml/parsers/*.c
+src/libs/expat/*.c
+```
+
+**Include paths:**
+
+| Path | For |
+|------|-----|
+| `<lvgl-root>` | `lvgl.h` |
+| `<lvgl-root>/src` | `<misc/lv_types.h>`, `<core/lv_observer.h>`, `<lv_conf_internal.h>` … |
+| `<helix-xml-root>` | `helix_xml.h` |
+| `<helix-xml-root>/src` | internal `xml/*.h` headers |
+| wherever your `lv_conf.h` lives | LVGL configuration |
+
+`<lvgl-root>/src` must be visible to **anything that includes `helix_xml.h`**, not just to
+helix-xml's own translation units — the public headers include LVGL that way. In CMake, put it
+on the `lvgl` target as `PUBLIC` rather than making it `PRIVATE` to helix-xml.
+
+**Configuration:** set `LV_USE_XML 1` in your `lv_conf.h`. Every source here is wrapped in
+`#if LV_USE_XML`, so with it off the whole library compiles away to nothing.
+
+**Use:** include `helix_xml.h` after `lvgl.h`, and `helix_xml_private.h` after `lvgl_private.h`.
+Then register components and build a view:
+
+```c
+#include <lvgl.h>
+#include "helix_xml.h"
+
+lv_xml_init();
+lv_xml_register_component_from_file("A:ui/my_panel.xml");
+lv_obj_t * panel = lv_xml_create(lv_screen_active(), "my_panel", NULL);
+```
+
+Loading from files needs an LVGL filesystem driver; `lv_xml_register_component_from_data()`
+takes a string instead if you would rather embed the markup.
+
+> The engine used to reach LVGL by relative path (`"../misc/lv_types.h"`), which only worked
+> because `src/` carried symlinks faking LVGL's directory layout — so the tree only built when
+> planted at `<x>/lib/helix-xml` beside `<x>/lib/lvgl`. Those are gone; the include path above
+> is the whole contract now.
+
+## Notes for contributors
+
+- Pure C. It must not include or call app-layer C++.
 - Excluded from clang-format; match surrounding style by hand.
-- Include `helix_xml.h` after `lvgl.h`; `helix_xml_private.h` after `lvgl_private.h`.
+- `src/libs/expat/` is LVGL's vendored expat, carrying LVGL's `#include <lv_conf_internal.h>` /
+  `#if LV_USE_XML` wrapper. `add_lvgl_if.sh` reapplies that wrapper when re-vendoring.
 
 Further reading, in the HelixScreen repository:
 

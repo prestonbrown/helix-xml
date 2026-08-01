@@ -1,6 +1,6 @@
 /* expat_config.h.  Generated from expat_config.h.in by configure.  */
 
-#include "../../lv_conf_internal.h"
+#include <lv_conf_internal.h>
 #if LV_USE_XML
 /* expat_config.h.in.  Generated from configure.ac by autoheader.  */
 

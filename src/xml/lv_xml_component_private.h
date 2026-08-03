@@ -59,6 +59,11 @@ typedef struct {
 typedef struct {
     const char * name;
     lv_subject_t * subject;
+    /** true  = this scope allocated the lv_subject_t (<subject> / <subject_expr>);
+                teardown must deinit and free it.
+        false = borrowed. C++ owns the storage and registered it via
+                lv_xml_register_subject(); the scope only holds the pointer. */
+    bool owned;
 } lv_xml_subject_t;
 
 /**
@@ -147,6 +152,21 @@ void lv_xml_component_scope_init(lv_xml_component_scope_t * scope);
  * @param frag      pointer to a xml_frag_record_t record
  */
 void lv_xml_frag_record_free(xml_frag_record_t * frag);
+
+/**
+ * Register a subject the SCOPE owns: the caller allocated the `lv_subject_t` for
+ * a `<subject>` / `<subject_expr>` element and hands ownership over, so scope
+ * teardown deinits and frees it. Internal to the parser -- deliberately NOT in
+ * lv_xml.h, because a public "the library now owns your subject" entry point is
+ * exactly the footgun this flag exists to prevent. Everything outside the parser
+ * uses `lv_xml_register_subject()`, which records the subject as borrowed.
+ * @param scope     the scope to register into; NULL means the `"globals"` scope
+ * @param name      name to register under (copied)
+ * @param subject   the subject; ownership transfers to `scope`
+ * @return          LV_RESULT_OK on success
+ */
+lv_result_t lv_xml_register_subject_owned(lv_xml_component_scope_t * scope, const char * name,
+                                          lv_subject_t * subject);
 
 /**********************
  *      MACROS

@@ -607,7 +607,15 @@ const lv_font_t * lv_xml_get_font(lv_xml_component_scope_t * scope, const char *
     return lv_font_get_default();
 }
 
-lv_result_t lv_xml_register_subject(lv_xml_component_scope_t * scope, const char * name, lv_subject_t * subject)
+/**
+ * Shared body of the two registration entry points. `owned` records who has to
+ * free the `lv_subject_t`: the scope (a parser-allocated `<subject>` /
+ * `<subject_expr>`) or the caller (C++ storage merely lent to the scope). The
+ * scope's teardown reads it back — see the `subjects_ll` walk in
+ * `lv_xml_component_unregister`.
+ */
+static lv_result_t register_subject_impl(lv_xml_component_scope_t * scope, const char * name,
+                                         lv_subject_t * subject, bool owned)
 {
     if(scope == NULL) scope = lv_xml_component_get_scope("globals");
     if(scope == NULL) {
@@ -619,8 +627,11 @@ lv_result_t lv_xml_register_subject(lv_xml_component_scope_t * scope, const char
     LV_LL_READ(&scope->subjects_ll, s) {
         if(lv_streq(s->name, name)) {
             /* Update the pointer — the subject may have moved after a
-             * destroy/recreate cycle (e.g., soft restart). */
+             * destroy/recreate cycle (e.g., soft restart). Provenance follows
+             * the new pointer: whoever registered last is the authority on who
+             * owns the storage now. */
             s->subject = subject;
+            s->owned = owned;
             return LV_RESULT_OK;
         }
     }
@@ -633,8 +644,23 @@ lv_result_t lv_xml_register_subject(lv_xml_component_scope_t * scope, const char
     lv_memzero(s, sizeof(*s));
     s->name = lv_strdup(name);
     s->subject = subject;
+    s->owned = owned;
 
     return LV_RESULT_OK;
+}
+
+lv_result_t lv_xml_register_subject(lv_xml_component_scope_t * scope, const char * name, lv_subject_t * subject)
+{
+    /* Public entry point: the caller keeps ownership of `subject`. It is
+     * routinely a C++ static/member (e.g. a modal's `static inline
+     * lv_subject_t`), so the scope must never free or deinit it. */
+    return register_subject_impl(scope, name, subject, false);
+}
+
+lv_result_t lv_xml_register_subject_owned(lv_xml_component_scope_t * scope, const char * name,
+                                          lv_subject_t * subject)
+{
+    return register_subject_impl(scope, name, subject, true);
 }
 
 lv_subject_t * lv_xml_get_subject(lv_xml_component_scope_t * scope, const char * name)

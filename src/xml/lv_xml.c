@@ -694,9 +694,14 @@ lv_result_t lv_xml_unregister_subject(lv_xml_component_scope_t * scope, const ch
     lv_xml_subject_t * s;
     LV_LL_READ(&scope->subjects_ll, s) {
         if(lv_streq(s->name, name)) {
-            lv_free((char *)s->name);          /* free the name copy only */
+            /* Same ownership split as scope teardown: an owned subject dies with
+             * its record, a borrowed one belongs to the caller and is only
+             * dropped. Freeing unconditionally would abort on C++ storage;
+             * freeing nothing leaked every parser-allocated subject removed by
+             * name. */
+            lv_xml_subject_record_release(s);
             lv_ll_remove(&scope->subjects_ll, s);
-            lv_free(s);                        /* free the record, NOT s->subject */
+            lv_free(s); /* the record; s->subject was handled above */
             return LV_RESULT_OK;
         }
     }

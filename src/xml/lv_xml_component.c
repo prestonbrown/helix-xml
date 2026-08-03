@@ -286,6 +286,53 @@ lv_result_t lv_xml_register_component_from_file(const char * path)
     return res;
 }
 
+/**
+ * A `subjects_ll` record holds one of two provenances, and only its `owned`
+ * flag tells them apart:
+ *
+ * OWNED (`<subject>` / `<subject_expr>`): the parser lv_zalloc'd the
+ *   lv_subject_t and this record is its only owner, so releasing the record
+ *   must deinit and free it. The lv_subject_deinit() is not optional: widgets
+ *   created from the component (bind_text / bind_flag_if / bind_style_* /
+ *   cond= / subject_expr, all of which register via lv_subject_add_observer*)
+ *   keep observers on these subjects. Without the deinit the raw lv_free would
+ *   leave those observers dangling, and the widget's later LV_EVENT_DELETE
+ *   (e.g. NavigationManager::rebuild_active_views on a HELIX_HOT_RELOAD
+ *   re-register, which deletes the old widgets AFTER the component is
+ *   unregistered) would lv_observer_remove() a freed subject -> UAF.
+ *   lv_subject_deinit only walks subs_ll and removes observers; it does not
+ *   touch value/prev_value, so the string buffers are freed separately.
+ *
+ * BORROWED (lv_xml_register_subject from application code): the caller owns the
+ *   storage -- typically a C++ `static inline lv_subject_t` or a member of a
+ *   long-lived manager -- and only lent the pointer. Freeing it hands a
+ *   non-heap (or foreign-heap) address to lv_free: with LV_USE_STDLIB_MALLOC =
+ *   LV_STDLIB_CLIB that is libc free() on a __DATA address -> immediate heap
+ *   abort. Deinit'ing it is just as wrong even though it does not crash here:
+ *   the subject outlives this record, and lv_subject_deinit rips the observers
+ *   off widgets in OTHER live components that legitimately observe the same
+ *   subject, leaving them silently unbound. Only the record's own name string
+ *   belongs to us.
+ *
+ * The name is lv_strdup'd by register_subject_impl on both paths, so it is
+ * always freed. Does NOT unlink the record from its list -- the caller either
+ * lv_ll_clear()s the whole list or lv_ll_remove()s this one.
+ */
+void lv_xml_subject_record_release(lv_xml_subject_t * s)
+{
+    if(s == NULL) return;
+
+    lv_free((char *)s->name);
+    if(!s->owned) return;
+
+    lv_subject_deinit(s->subject);
+    if(s->subject->type == LV_SUBJECT_TYPE_STRING) {
+        lv_free((char *)s->subject->prev_value.pointer);
+        lv_free((char *)s->subject->value.pointer);
+    }
+    lv_free(s->subject);
+}
+
 lv_result_t lv_xml_component_unregister(const char * name)
 {
     lv_xml_component_scope_t * scope = lv_xml_component_get_scope(name);
@@ -374,46 +421,10 @@ lv_result_t lv_xml_component_unregister(const char * name)
     }
     lv_ll_clear(&scope->subject_expr_ll);
 
-    /* subjects_ll holds records of two different provenances, and only the
-     * record's `owned` flag tells them apart:
-     *
-     * OWNED (`<subject>` / `<subject_expr>`): the parser lv_zalloc'd the
-     *   lv_subject_t and the scope is its only owner, so teardown must deinit
-     *   and free it. The lv_subject_deinit() is not optional: widgets created
-     *   from this component (bind_text / bind_flag_if / bind_style_* / cond= /
-     *   subject_expr, all of which register via lv_subject_add_observer*) keep
-     *   observers on these subjects. Without the deinit the raw lv_free would
-     *   leave those observers dangling, and the widget's later LV_EVENT_DELETE
-     *   (e.g. NavigationManager::rebuild_active_views on a HELIX_HOT_RELOAD
-     *   re-register, which deletes the old widgets AFTER the component is
-     *   unregistered) would lv_observer_remove() a freed subject -> UAF.
-     *   lv_subject_deinit only walks subs_ll and removes observers; it does not
-     *   touch value/prev_value, so the string buffers are freed separately.
-     *
-     * BORROWED (lv_xml_register_subject from application code): the caller owns
-     *   the storage -- typically a C++ `static inline lv_subject_t` or a member
-     *   of a long-lived manager -- and only lent the pointer to this scope.
-     *   Freeing it hands a non-heap (or foreign-heap) address to lv_free: with
-     *   LV_USE_STDLIB_MALLOC = LV_STDLIB_CLIB that is libc free() on a __DATA
-     *   address -> immediate heap abort. Deinit'ing it is just as wrong even
-     *   though it does not crash here: the subject outlives this scope, and
-     *   lv_subject_deinit rips the observers off widgets in OTHER live
-     *   components that legitimately observe the same subject, leaving them
-     *   silently unbound. For a borrowed record only the record's own name
-     *   string belongs to the scope.
-     *
-     * The name string is lv_strdup'd by register_subject_impl on both paths, so
-     * it is always freed here. */
+    /* Ownership rule lives in lv_xml_subject_record_release() -- read it there. */
     lv_xml_subject_t * subject;
     LV_LL_READ(&scope->subjects_ll, subject) {
-        lv_free((char *)subject->name);
-        if(!subject->owned) continue;
-        lv_subject_deinit(subject->subject);
-        if(subject->subject->type == LV_SUBJECT_TYPE_STRING) {
-            lv_free((char *)subject->subject->prev_value.pointer);
-            lv_free((char *)subject->subject->value.pointer);
-        }
-        lv_free(subject->subject);
+        lv_xml_subject_record_release(subject);
     }
     lv_ll_clear(&scope->subjects_ll);
 

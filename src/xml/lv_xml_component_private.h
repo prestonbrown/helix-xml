@@ -168,6 +168,14 @@ void lv_xml_frag_record_free(xml_frag_record_t * frag);
 lv_result_t lv_xml_register_subject_owned(lv_xml_component_scope_t * scope, const char * name,
                                           lv_subject_t * subject);
 
+/**
+ * Release what a `subjects_ll` record owns: always its name copy, plus the
+ * `lv_subject_t` itself when `owned` is set. Single home for the ownership
+ * rule -- see the comment on the definition. Does not unlink the record.
+ * @param s   the record; NULL is a no-op
+ */
+void lv_xml_subject_record_release(lv_xml_subject_t * s);
+
 /**********************
  *      MACROS
  **********************/

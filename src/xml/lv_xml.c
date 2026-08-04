@@ -1151,12 +1151,19 @@ static void resolve_consts(const char ** item_attrs, lv_xml_component_scope_t * 
                 continue;  /*Keep original value with #*/
             }
 
-            const char * const_value = lv_xml_get_const(scope, value_clean);
+            const char * const_value = lv_xml_get_const_silent(scope, value_clean);
             if(const_value) {
                 item_attrs[i + 1] = const_value;
             }
-            /*If the const attribute is not provide don't set it*/
+            /*Unknown const: drop the attribute so the widget keeps its default,
+             *but say WHERE it was, or the message cannot be acted on in a tree
+             *this size. Parsing deliberately continues.*/
             else {
+                LV_LOG_WARN("Unknown const `#%s` in component `%s` (attribute `%s`) - "
+                            "attribute dropped",
+                            value_clean,
+                            (scope && scope->name) ? scope->name : "<unknown>",
+                            name);
                 item_attrs[i] = "";
                 item_attrs[i + 1] = "";
             }

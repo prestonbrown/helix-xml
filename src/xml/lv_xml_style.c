@@ -121,7 +121,11 @@ lv_result_t lv_xml_register_style(lv_xml_component_scope_t * scope, const char *
                 }
             }
             if(!const_found) {
-                LV_LOG_WARN("Constant `%s` is not found", value_clean);
+                LV_LOG_WARN("Unknown const `#%s` in style of component `%s` (property `%s`) - "
+                            "property skipped",
+                            value_clean,
+                            (scope && scope->name) ? scope->name : "<unknown>",
+                            name);
                 continue;
             }
         }

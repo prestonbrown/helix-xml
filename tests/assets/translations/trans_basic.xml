@@ -1,0 +1,7 @@
+<!-- Fixture for tests/cases/test_translation.c:
+     lv_xml_register_translation_from_file() on a real file.
+     SPDX-License-Identifier: MIT -->
+<translations languages="en de fr">
+  <translation tag="file_dog" en="Dog" de="Hund" fr="Chien"/>
+  <translation tag="file_cat" en="Cat" de="Katze" fr="Chat"/>
+</translations>

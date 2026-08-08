@@ -1,0 +1,8 @@
+<!-- Fixture for tests/cases/test_load.c: a good component sharing a directory
+     with two broken files. Must still register as "ok_alpha".
+     SPDX-License-Identifier: MIT -->
+<component>
+  <view extends="lv_obj" name="ok_alpha_root">
+    <lv_label name="ok_alpha_text" text="Alpha survived"/>
+  </view>
+</component>

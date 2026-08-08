@@ -1,0 +1,7 @@
+Fixture for tests/cases/test_load.c.
+
+Not an .xml file, so load_from_path() must skip it entirely rather than try to
+parse it. If the extension check ever regresses, this text is not well-formed
+XML and the scan would start warning about it.
+
+SPDX-License-Identifier: MIT

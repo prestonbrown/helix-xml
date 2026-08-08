@@ -1,0 +1,7 @@
+<!-- Fixture for tests/cases/test_load.c: perfectly well-formed XML whose root
+     tag is none of component/screen/globals/translations. load_from_path()
+     must classify it as unknown and skip it rather than registering it.
+     SPDX-License-Identifier: MIT -->
+<recipe name="not-a-component">
+  <ingredient name="flour"/>
+</recipe>

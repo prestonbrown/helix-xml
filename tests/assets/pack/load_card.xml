@@ -1,0 +1,8 @@
+<!-- Fixture for tests/cases/test_load.c: an ordinary <component> in a pack.
+     Registers under the file's basename, i.e. "load_card".
+     SPDX-License-Identifier: MIT -->
+<component>
+  <view extends="lv_obj" name="load_card_root">
+    <lv_label name="load_card_title" text="Card from disk"/>
+  </view>
+</component>

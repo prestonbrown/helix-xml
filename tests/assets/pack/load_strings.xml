@@ -1,0 +1,7 @@
+<!-- Fixture for tests/cases/test_load.c: a <translations> root inside a pack.
+     Proves the scan dispatches on the root tag, not on the filename - this one
+     must NOT become a component called "load_strings".
+     SPDX-License-Identifier: MIT -->
+<translations languages="en de">
+  <translation tag="pack_greeting" en="Hello from pack" de="Hallo vom Pack"/>
+</translations>

@@ -1,0 +1,9 @@
+<!-- Fixture for tests/cases/test_load.c.
+
+     Broken BEFORE the first start tag, so load_from_path()'s own root-tag
+     sniffer is the thing that rejects it ("XML parsing error: ..."). The
+     sniffer calls XML_StopParser() on the first start element, so this is the
+     only shape of breakage it can see.
+
+     Not valid XML on purpose - do not "fix" it. -->
+<<< this is not XML at all &

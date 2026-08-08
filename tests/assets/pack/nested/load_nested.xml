@@ -1,0 +1,9 @@
+<!-- Fixture for tests/cases/test_load.c: one level down, to prove
+     load_all_recursive() actually recurses into subdirectories.
+     Registers as "load_nested".
+     SPDX-License-Identifier: MIT -->
+<component>
+  <view extends="lv_obj" name="load_nested_root">
+    <lv_label name="load_nested_text" text="Nested from disk"/>
+  </view>
+</component>

@@ -1,0 +1,9 @@
+<!-- Fixture for tests/cases/test_load.c: a <screen> root. load_from_path()
+     dispatches "component", "screen" and "globals" to the same registrar, so
+     this must register as the component "load_screen_main".
+     SPDX-License-Identifier: MIT -->
+<screen>
+  <view extends="lv_obj" name="load_screen_root">
+    <lv_label name="load_screen_title" text="Screen from disk"/>
+  </view>
+</screen>

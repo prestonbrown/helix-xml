@@ -1,0 +1,9 @@
+<!-- Fixture for tests/cases/test_translation.c: a translation file that expat
+     cannot parse, so _from_file() must report LV_RESULT_INVALID.
+
+     </translations> below closes a tag that was never opened.
+     Not valid XML on purpose - do not "fix" it. -->
+<translations languages="en de">
+  <translation tag="broken" en="Broken" de="Kaputt"/>
+  </wrong>
+</translations>

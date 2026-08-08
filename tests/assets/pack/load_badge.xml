@@ -1,0 +1,8 @@
+<!-- Fixture for tests/cases/test_load.c: a second component, so the scan has to
+     register more than one file. Registers as "load_badge".
+     SPDX-License-Identifier: MIT -->
+<component>
+  <view extends="lv_obj" name="load_badge_root">
+    <lv_label name="load_badge_text" text="Badge from disk"/>
+  </view>
+</component>

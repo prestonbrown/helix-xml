@@ -1,0 +1,12 @@
+<!-- Fixture for tests/cases/test_load.c: the second good component in the
+     directory that also holds the broken ones. Registers as "ok_beta".
+
+     Directory order from readdir() is not guaranteed, so having a good file on
+     both sides of the alphabet means at least one of them is scanned AFTER a
+     broken file whichever order the filesystem hands them over in.
+     SPDX-License-Identifier: MIT -->
+<component>
+  <view extends="lv_obj" name="ok_beta_root">
+    <lv_label name="ok_beta_text" text="Beta survived"/>
+  </view>
+</component>

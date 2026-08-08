@@ -1,0 +1,15 @@
+<!-- Fixture for tests/cases/test_load.c.
+
+     A well-formed <component> START tag with a broken BODY: the root-tag
+     sniffer in load_from_path() stops at the first start element and so sees
+     nothing wrong, and the breakage is only caught later inside
+     lv_xml_register_component_from_data(). That is the second, more realistic
+     failure path a pack can hit.
+
+     <lv_label> below is never closed and </view> does not match.
+     Not valid XML on purpose - do not "fix" it. -->
+<component>
+  <view extends="lv_obj" name="broken_body_root">
+    <lv_label name="broken_body_text" text="never closed">
+  </view>
+</component>

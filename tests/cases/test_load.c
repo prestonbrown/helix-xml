@@ -35,10 +35,19 @@
  *    lv_xml_load.c and lv_xml_load.h, and tests/lv_conf.h has
  *    LV_USE_FS_FROGFS 0 - they do not exist in this build. They are not
  *    "untested because nobody wrote a test": reaching them needs a frogfs
- *    binary IMAGE (magic + entry table + hash table + CRC32 footer, see
+ *    binary IMAGE (magic + entry table + hash table, see
  *    lvgl/src/libs/frogfs/src/frogfs_format.h) produced by frogfs' external
- *    Python packing tool, committed as a binary fixture that would have to be
- *    regenerated on every LVGL bump. See the report accompanying this file.
+ *    Python packing tool, committed as a binary fixture. Regeneration is
+ *    triggered by a frogfs format MAJOR bump, not by an LVGL bump - frogfs.c
+ *    validates ver_major only. The format's CRC32 footer is never checked at
+ *    load time, so a fixture does not have to produce a correct one.
+ *
+ *    Deliberately kept rather than deleted: lv_xml_unload() is this module's
+ *    ONLY teardown path - a pack loaded through lv_xml_load_all_from_path()
+ *    cannot be un-registered at all - and the blob route is upstream LVGL's
+ *    documented way to ship XML to a target with no writable filesystem. The
+ *    code costs nothing while LV_USE_FS_FROGFS is 0. Upstream shipped these
+ *    untested too.
  *
  *  - NULL into lv_xml_load_all_from_path(). It does `path[0]` and
  *    `lv_strlen(path)` with no guard, then hands the pointer to

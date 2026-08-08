@@ -155,6 +155,35 @@ static void test_to_size_guards_null_and_empty(void)
                                     "an empty value (what a failed ${expr} splices in) must be 0");
 }
 
+/**
+ * The empty-string guard exists because the percent-suffix check was written as
+ * `txt[lv_strlen(txt) - 1]`, which for "" indexes txt[-1] - one byte BEFORE the
+ * buffer. Whatever happened to sit there decided the answer: a stray '%' turned
+ * a plain 0 into lv_pct(0).
+ *
+ * test_to_size_guards_null_and_empty above passes "" as a string literal, whose
+ * predecessor byte is whatever the linker put there - so without the guard it
+ * passes or fails on the rodata layout. This one CONTROLS the preceding byte, so
+ * removing the guard fails it every time, and fails it identically in a solo run
+ * and a full-suite run.
+ */
+static void test_to_size_empty_string_does_not_read_the_byte_before_it(void)
+{
+    /* Two empty strings differing only in their out-of-bounds predecessor. An
+     * in-bounds parser cannot tell them apart. */
+    char poisoned[4] = {'%', '\0', '\0', '\0'};
+    char benign[4] = {'x', '\0', '\0', '\0'};
+
+    int32_t after_pct = lv_xml_to_size(poisoned + 1);
+    int32_t after_x = lv_xml_to_size(benign + 1);
+
+    TEST_ASSERT_EQUAL_INT32_MESSAGE(after_x, after_pct,
+                                    "lv_xml_to_size(\"\") read the byte before the string - the "
+                                    "result changed with a '%' sitting in front of the NUL");
+    TEST_ASSERT_EQUAL_INT32_MESSAGE(0, after_pct,
+                                    "an absent size is a plain 0, never lv_pct(0)");
+}
+
 static void test_to_size_returns_zero_for_unparseable_input(void)
 {
     TEST_ASSERT_EQUAL_INT32(0, lv_xml_to_size("abc"));
@@ -1134,6 +1163,7 @@ int main(void)
     RUN_TEST(test_to_size_parses_pixels_percentages_and_content);
     RUN_TEST(test_to_size_zero_percent_is_not_zero);
     RUN_TEST(test_to_size_guards_null_and_empty);
+    RUN_TEST(test_to_size_empty_string_does_not_read_the_byte_before_it);
     RUN_TEST(test_to_size_returns_zero_for_unparseable_input);
 
     RUN_TEST(test_align_to_enum_accepts_every_align_name);

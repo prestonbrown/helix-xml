@@ -962,6 +962,357 @@ static void test_bind_of_a_null_expression_is_a_constant_zero(void)
     lv_xml_expr_unbind(h);
 }
 
+/**
+ * Free-once, proved by heap accounting rather than by "it did not crash".
+ *
+ * bind() takes ownership of the expression and the binding frees it exactly
+ * once, whether the teardown comes from unbind() or from the owner being
+ * deleted. A repeated subject ("a + a") is the interesting input, because the
+ * de-duplicated dependency list means one observer for two AST references - the
+ * shape that would produce a double free if the free walked references instead
+ * of distinct subjects.
+ *
+ * Neither failure mode is observable from the callback: a leak still fires
+ * correctly and a double free only aborts under a sanitizer. lv_mem_monitor is,
+ * so a cycle that does not return the heap to where the previous cycle left it
+ * is the assertion. (A genuine double free aborts inside tlsf, which fails the
+ * test by killing the runner - also a failure, just a louder one.)
+ */
+static void test_the_bind_lifecycle_returns_the_heap_to_steady_state(void)
+{
+    subjects_reset();
+
+    size_t after_cycle[4];
+
+    for(int i = 0; i < 4; i++) {
+        /* Both teardown paths in one cycle: explicit unbind, and owner delete. */
+        lv_obj_t * unbound_owner = lv_obj_create(helix_test_env_screen());
+        bind_probe_t p1 = {0, 0};
+        lv_xml_expr_bind_t * h = lv_xml_expr_bind(must_compile("a + a"), unbound_owner,
+                                                  bind_probe_cb, &p1);
+        TEST_ASSERT_EQUAL_INT(1, p1.calls);
+        lv_xml_expr_unbind(h);
+        lv_obj_delete(unbound_owner);
+
+        lv_obj_t * deleted_owner = lv_obj_create(helix_test_env_screen());
+        bind_probe_t p2 = {0, 0};
+        lv_xml_expr_bind(must_compile("a + a"), deleted_owner, bind_probe_cb, &p2);
+        TEST_ASSERT_EQUAL_INT(1, p2.calls);
+        lv_obj_delete(deleted_owner);
+
+        helix_test_pump(30);
+
+        lv_mem_monitor_t mon;
+        lv_mem_monitor(&mon);
+        after_cycle[i] = mon.free_size;
+    }
+
+    /* Cycle 0 is a warm-up - the first pass through a size class carves blocks
+     * the later ones reuse. Cycles 1..3 are steady state. */
+    for(int i = 2; i < 4; i++) {
+        TEST_ASSERT_EQUAL_size_t_MESSAGE(
+            after_cycle[1], after_cycle[i],
+            helix_xml_assert_msgf("cycle %d did not return the heap to where cycle 1 left it - "
+                                  "a bind is leaking its expression or its observer list", i));
+    }
+}
+
+/*===========================================================================
+ * Inline `${expr}` splices in XML attributes
+ *
+ * The other consumer of this compiler. xml_compose_indexed() (lv_xml.c) splices
+ * `${...}` tokens into an attribute value at parse time; a token that is a bare
+ * identifier takes the legacy name-substitution path, and ANYTHING else is
+ * handed to lv_xml_expr_compile with a resolver that maps `i` to the <repeat>
+ * loop index, a numeric component param to a transient int subject, and
+ * everything else to a real scope subject.
+ *
+ * The split of duty: tests/cases/test_indexed_subject.c owns the bare-token
+ * path (`${i}`, `${grp}`, and their unresolvable cases). This section owns the
+ * arithmetic path, which is the part that runs the expression engine.
+ *
+ * RESOLVE-ONCE is the contract that makes this different from `<subject_expr>`:
+ * compile, eval and free all happen inside one compose call and no observer is
+ * ever attached, so the spliced value is frozen at parse time.
+ *
+ * Every assertion below reads a style property the XML itself declared, never a
+ * laid-out coordinate - see the rule at the top of helpers/xml_assert.h.
+ *==========================================================================*/
+
+/** Storage for the per-iteration string subjects the splice tests bind to. */
+#define SPLICE_SLOTS 4
+static lv_subject_t g_slot_subjects[SPLICE_SLOTS];
+static char g_slot_bufs[SPLICE_SLOTS][32];
+
+static void register_slot_string(uint32_t slot, const char * name, const char * value)
+{
+    lv_subject_init_string(&g_slot_subjects[slot], g_slot_bufs[slot], NULL,
+                           sizeof(g_slot_bufs[slot]), value);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(LV_RESULT_OK,
+                                  (int)lv_xml_register_subject(NULL, name, &g_slot_subjects[slot]),
+                                  helix_xml_assert_msgf("could not register subject '%s'", name));
+}
+
+/** Drop every observer off the static subjects before the env tears LVGL down. */
+static void release_slots(uint32_t used)
+{
+    for(uint32_t i = 0; i < used; i++) lv_subject_deinit(&g_slot_subjects[i]);
+}
+
+static const char * SPLICE_NAME_XML =
+    "<component>"
+    "  <view extends=\"lv_obj\" name=\"sn_root\">"
+    "    <lv_obj name=\"row\">"
+    "      <repeat count=\"4\">"
+    "        <lv_label bind_text=\"slot_${i + 1}_label\"/>"
+    "      </repeat>"
+    "    </lv_obj>"
+    "  </view>"
+    "</component>";
+
+/**
+ * Arithmetic over the loop index, spliced into a SUBJECT NAME: the 0-based `i`
+ * becomes the 1-based numbering an app's subjects are usually declared with.
+ * The four subjects carry four different strings, so a splice that dropped the
+ * arithmetic (binding slot_0..slot_3) resolves nothing and every label keeps its
+ * empty default; one that composed the name once lands all four on "one".
+ */
+static void test_an_expr_splice_composes_a_per_iteration_subject_name(void)
+{
+    register_slot_string(0, "slot_1_label", "one");
+    register_slot_string(1, "slot_2_label", "two");
+    register_slot_string(2, "slot_3_label", "three");
+    register_slot_string(3, "slot_4_label", "four");
+
+    ASSERT_XML_REGISTERS("expr_splice_name", SPLICE_NAME_XML);
+
+    lv_obj_t * root = XML_CREATE(helix_test_env_screen(), "expr_splice_name", NULL);
+    helix_test_pump(30);
+
+    lv_obj_t * row = ASSERT_NAMED(root, "row");
+    ASSERT_CHILD_COUNT(row, 4);
+
+    ASSERT_LABEL_TEXT(lv_obj_get_child(row, 0), "one");
+    ASSERT_LABEL_TEXT(lv_obj_get_child(row, 1), "two");
+    ASSERT_LABEL_TEXT(lv_obj_get_child(row, 2), "three");
+    ASSERT_LABEL_TEXT(lv_obj_get_child(row, 3), "four");
+
+    release_slots(SPLICE_SLOTS);
+}
+
+static const char * SPLICE_NUM_XML =
+    "<component>"
+    "  <view extends=\"lv_obj\" name=\"snum_root\">"
+    "    <lv_obj name=\"row\">"
+    "      <repeat count=\"4\">"
+    "        <lv_obj name=\"cell\" width=\"10\" height=\"10\" style_translate_x=\"${i * 84}\"/>"
+    "      </repeat>"
+    "    </lv_obj>"
+    "  </view>"
+    "</component>";
+
+/**
+ * The same splice consumed as a NUMBER rather than as part of a name. The
+ * multiplier is what makes it a real check: an implementation that spliced the
+ * raw index would produce 0,1,2,3 and pass any assertion that only looked for
+ * "distinct and increasing".
+ */
+static void test_an_expr_splice_computes_a_numeric_style_attribute(void)
+{
+    ASSERT_XML_REGISTERS("expr_splice_num", SPLICE_NUM_XML);
+
+    lv_obj_t * root = XML_CREATE(helix_test_env_screen(), "expr_splice_num", NULL);
+    helix_test_pump(30);
+
+    lv_obj_t * row = ASSERT_NAMED(root, "row");
+    ASSERT_CHILD_COUNT(row, 4);
+
+    ASSERT_STYLE_INT(lv_obj_get_child(row, 0), LV_STYLE_TRANSLATE_X, LV_PART_MAIN, 0);
+    ASSERT_STYLE_INT(lv_obj_get_child(row, 1), LV_STYLE_TRANSLATE_X, LV_PART_MAIN, 84);
+    ASSERT_STYLE_INT(lv_obj_get_child(row, 2), LV_STYLE_TRANSLATE_X, LV_PART_MAIN, 168);
+    ASSERT_STYLE_INT(lv_obj_get_child(row, 3), LV_STYLE_TRANSLATE_X, LV_PART_MAIN, 252);
+}
+
+static const char * SPLICE_EQUIV_XML =
+    "<component>"
+    "  <view extends=\"lv_obj\" name=\"seq_root\">"
+    "    <lv_obj name=\"row\">"
+    "      <repeat count=\"3\">"
+    "        <lv_obj name=\"bare\" width=\"5\" height=\"5\" style_translate_x=\"${i}\"/>"
+    "        <lv_obj name=\"expr\" width=\"5\" height=\"5\" style_translate_x=\"${i + 0}\"/>"
+    "      </repeat>"
+    "    </lv_obj>"
+    "  </view>"
+    "</component>";
+
+/**
+ * `${i}` and `${i + 0}` take two DIFFERENT code paths - xml_token_is_bare_identifier()
+ * sends the first to name substitution and the second to the expression
+ * compiler - and must be indistinguishable in the result. This pins that
+ * boundary: the loop index the expression resolver seeds is the same index the
+ * legacy path formats, so adding arithmetic to an existing `${i}` cannot shift
+ * a layout by one.
+ */
+static void test_a_bare_index_and_an_expression_over_it_agree(void)
+{
+    ASSERT_XML_REGISTERS("expr_splice_equiv", SPLICE_EQUIV_XML);
+
+    lv_obj_t * root = XML_CREATE(helix_test_env_screen(), "expr_splice_equiv", NULL);
+    helix_test_pump(30);
+
+    lv_obj_t * row = ASSERT_NAMED(root, "row");
+    ASSERT_CHILD_COUNT(row, 6); /* two per iteration */
+
+    for(int k = 0; k < 3; k++) {
+        lv_style_value_t bare = lv_obj_get_style_prop(lv_obj_get_child(row, k * 2), LV_PART_MAIN,
+                                                      LV_STYLE_TRANSLATE_X);
+        lv_style_value_t expr = lv_obj_get_style_prop(lv_obj_get_child(row, k * 2 + 1), LV_PART_MAIN,
+                                                     LV_STYLE_TRANSLATE_X);
+        TEST_ASSERT_EQUAL_INT32_MESSAGE((int32_t)bare.num, (int32_t)expr.num,
+                                        helix_xml_assert_msgf(
+                                            "${i} and ${i + 0} disagreed at iteration %d", k));
+        TEST_ASSERT_EQUAL_INT32_MESSAGE(k, (int32_t)bare.num,
+                                        "both spellings must yield the 0-based loop index");
+    }
+}
+
+static const char * SPLICE_SUBJECT_XML =
+    "<component>"
+    "  <view extends=\"lv_obj\" name=\"ssubj_root\">"
+    "    <lv_obj name=\"g\" width=\"${base * scale}\" height=\"10\"/>"
+    "  </view>"
+    "</component>";
+
+/**
+ * A `${expr}` over real subjects is evaluated ONCE, at parse time, and never
+ * again - no observer is attached, so a later change to an operand does not
+ * move the widget. That is the whole difference between this and
+ * `<subject_expr>`, and it is easy to "fix" by accident into a live binding, so
+ * the second half of this test is the load-bearing half.
+ */
+static void test_subject_operands_in_a_splice_are_resolved_once(void)
+{
+    subjects_reset();
+    lv_subject_set_int(&g_subs[0], 10); /* base  */
+    lv_subject_set_int(&g_subs[1], 3);  /* scale */
+    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_register_subject(NULL, "base", &g_subs[0]));
+    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_register_subject(NULL, "scale", &g_subs[1]));
+
+    ASSERT_XML_REGISTERS("expr_splice_subj", SPLICE_SUBJECT_XML);
+
+    lv_obj_t * root = XML_CREATE(helix_test_env_screen(), "expr_splice_subj", NULL);
+    helix_test_pump(30);
+
+    lv_obj_t * g = ASSERT_NAMED(root, "g");
+    ASSERT_STYLE_INT(g, LV_STYLE_WIDTH, LV_PART_MAIN, 30);
+
+    lv_subject_set_int(&g_subs[0], 100); /* would be 300 if this were a binding */
+    helix_test_pump(30);
+    ASSERT_STYLE_INT(g, LV_STYLE_WIDTH, LV_PART_MAIN, 30);
+}
+
+static const char * SPLICE_PARAM_XML =
+    "<component>"
+    "  <api><prop name=\"cols\" type=\"string\"/></api>"
+    "  <view extends=\"lv_obj\" name=\"sparam_root\">"
+    "    <lv_obj name=\"g\" width=\"${cols * 2}\" height=\"10\"/>"
+    "  </view>"
+    "</component>";
+
+/**
+ * The resolver's second branch: a component param whose value parses as an
+ * integer becomes a transient operand, so a caller can pass `cols="4"` and have
+ * the component compute from it. Neither the loop index nor a registered
+ * subject is involved.
+ */
+static void test_a_numeric_component_param_is_a_valid_splice_operand(void)
+{
+    ASSERT_XML_REGISTERS("expr_splice_param", SPLICE_PARAM_XML);
+
+    const char * attrs[] = {"cols", "4", NULL, NULL};
+    lv_obj_t * root = XML_CREATE(helix_test_env_screen(), "expr_splice_param", attrs);
+    helix_test_pump(30);
+
+    ASSERT_STYLE_INT(ASSERT_NAMED(root, "g"), LV_STYLE_WIDTH, LV_PART_MAIN, 8);
+}
+
+static const char * SPLICE_BAD_XML =
+    "<component>"
+    "  <view extends=\"lv_obj\" name=\"sbad_root\">"
+    "    <lv_obj name=\"unknown_ident\" width=\"5\" height=\"5\""
+    "            style_translate_x=\"1${bogus_ident + 1}2\"/>"
+    "    <lv_obj name=\"syntax_error\" width=\"5\" height=\"5\""
+    "            style_translate_x=\"3${5 + }4\"/>"
+    "  </view>"
+    "</component>";
+
+/**
+ * A `${expr}` that will not compile splices the EMPTY STRING and the parse
+ * carries on. Asserting only that the attribute came out 0 would prove nothing -
+ * 0 is also what an absent attribute gives - so both cases here wrap the splice
+ * in literal digits: "1${...}2" must come out as the number 12, which is only
+ * true if exactly zero characters were spliced in the middle.
+ *
+ * The two inputs fail at different stages: an identifier no resolver knows
+ * (compile fails on the operand) and a syntax error (compile fails on the
+ * grammar). Both must warn, because the resulting widget tree is
+ * indistinguishable from a correct one.
+ */
+static void test_an_uncompilable_splice_yields_an_empty_string_and_warns(void)
+{
+    ASSERT_XML_REGISTERS("expr_splice_bad", SPLICE_BAD_XML);
+
+    log_capture_start();
+    lv_obj_t * root = XML_CREATE(helix_test_env_screen(), "expr_splice_bad", NULL);
+    helix_test_pump(30);
+    log_capture_stop();
+
+    /* Both widgets were still created - a failed splice is not a failed parse. */
+    lv_obj_t * unknown = ASSERT_NAMED(root, "unknown_ident");
+    lv_obj_t * syntax = ASSERT_NAMED(root, "syntax_error");
+
+    ASSERT_STYLE_INT(unknown, LV_STYLE_TRANSLATE_X, LV_PART_MAIN, 12);
+    ASSERT_STYLE_INT(syntax, LV_STYLE_TRANSLATE_X, LV_PART_MAIN, 34);
+
+    TEST_ASSERT_TRUE_MESSAGE(log_contains("${bogus_ident + 1} could not be evaluated"),
+                             "an unresolvable operand must name the whole token it came from");
+    TEST_ASSERT_TRUE_MESSAGE(log_contains("${5 + } could not be evaluated"),
+                             "a malformed expression must warn too - the tree looks correct "
+                             "either way");
+}
+
+static const char * SPLICE_PARAM_BAD_XML =
+    "<component>"
+    "  <api><prop name=\"grp\" type=\"string\"/></api>"
+    "  <view extends=\"lv_obj\" name=\"spbad_root\">"
+    "    <lv_obj name=\"g\" width=\"7${grp * 2}\" height=\"10\"/>"
+    "  </view>"
+    "</component>";
+
+/**
+ * A param that EXISTS but is not an integer falls past the transient-operand
+ * branch to the subject lookup, finds nothing, and fails the compile. The
+ * distinction matters: `cols="4"` and `grp="fan"` reach the resolver through
+ * exactly the same call, and only the xml_str_is_integer() test separates them.
+ *
+ * Same empty-splice proof as above: "7${...}" must come out as 7.
+ */
+static void test_a_non_numeric_component_param_makes_the_splice_fail(void)
+{
+    ASSERT_XML_REGISTERS("expr_splice_param_bad", SPLICE_PARAM_BAD_XML);
+
+    const char * attrs[] = {"grp", "fan", NULL, NULL};
+
+    log_capture_start();
+    lv_obj_t * root = XML_CREATE(helix_test_env_screen(), "expr_splice_param_bad", attrs);
+    helix_test_pump(30);
+    log_capture_stop();
+
+    ASSERT_STYLE_INT(ASSERT_NAMED(root, "g"), LV_STYLE_WIDTH, LV_PART_MAIN, 7);
+    TEST_ASSERT_TRUE_MESSAGE(log_contains("${grp * 2} could not be evaluated"),
+                             "a non-numeric param in arithmetic must warn, not silently splice");
+}
+
 /*---------------------------------------------------------------------------
  * main
  *--------------------------------------------------------------------------*/
@@ -1026,6 +1377,16 @@ int main(void)
     RUN_TEST(test_unbind_is_null_safe);
     RUN_TEST(test_deleting_the_owner_detaches_the_binding);
     RUN_TEST(test_bind_of_a_null_expression_is_a_constant_zero);
+    RUN_TEST(test_the_bind_lifecycle_returns_the_heap_to_steady_state);
+
+    /* inline ${expr} splices */
+    RUN_TEST(test_an_expr_splice_composes_a_per_iteration_subject_name);
+    RUN_TEST(test_an_expr_splice_computes_a_numeric_style_attribute);
+    RUN_TEST(test_a_bare_index_and_an_expression_over_it_agree);
+    RUN_TEST(test_subject_operands_in_a_splice_are_resolved_once);
+    RUN_TEST(test_a_numeric_component_param_is_a_valid_splice_operand);
+    RUN_TEST(test_an_uncompilable_splice_yields_an_empty_string_and_warns);
+    RUN_TEST(test_a_non_numeric_component_param_makes_the_splice_fail);
 
     return UNITY_END();
 }

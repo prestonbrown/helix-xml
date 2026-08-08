@@ -35,6 +35,9 @@
 #include <stdio.h>
 #include <string.h>
 
+/* Log capture: the divide-by-zero and token-limit warnings are the only
+ * observable difference in a couple of cases. */
+#include "helpers/helix_log_capture.h"
 #include "helpers/helix_test_env.h"
 #include "helpers/helix_test_pump.h"
 #include "helpers/xml_assert.h"
@@ -128,40 +131,6 @@ static int32_t eval_literal(const char * src)
     int32_t v = lv_xml_expr_eval(e);
     lv_xml_expr_free(e);
     return v;
-}
-
-/*---------------------------------------------------------------------------
- * Log capture - the divide-by-zero and token-limit warnings are the only
- * observable difference in a couple of cases.
- *--------------------------------------------------------------------------*/
-
-static char g_log_buf[4096];
-static size_t g_log_len;
-
-static void log_capture_cb(lv_log_level_t level, const char * buf)
-{
-    LV_UNUSED(level);
-    size_t n = strlen(buf);
-    if(g_log_len + n + 1 >= sizeof(g_log_buf)) return;
-    memcpy(g_log_buf + g_log_len, buf, n + 1);
-    g_log_len += n;
-}
-
-static void log_capture_start(void)
-{
-    g_log_buf[0] = '\0';
-    g_log_len = 0;
-    lv_log_register_print_cb(log_capture_cb);
-}
-
-static void log_capture_stop(void)
-{
-    lv_log_register_print_cb(NULL);
-}
-
-static bool log_contains(const char * needle)
-{
-    return strstr(g_log_buf, needle) != NULL;
 }
 
 /*===========================================================================

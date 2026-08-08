@@ -14,6 +14,11 @@
 #
 #   cmake -S tests -B build -DLVGL_DIR=/path/to/lvgl
 #
+# LVGL_DIR must be a PRISTINE upstream checkout. In particular it must NOT be
+# HelixScreen's lib/lvgl submodule: that one has patches/*.patch applied, which
+# inject calls to app-side symbols that a standalone test build cannot resolve.
+# A configure-time probe below rejects it with an explanation.
+#
 # Adding a test: drop a new file in cases/. It is picked up by the glob below
 # and becomes its own executable and its own ctest entry. No edits here.
 
@@ -69,6 +74,64 @@ if(LVGL_DIR)
     if(NOT EXISTS "${LVGL_DIR}/lvgl.h")
         message(FATAL_ERROR "LVGL_DIR=${LVGL_DIR} does not look like an LVGL checkout (no lvgl.h)")
     endif()
+
+    # Reject a checkout that a consuming application has patched.
+    #
+    # The obvious thing for a HelixScreen developer to point LVGL_DIR at is
+    # HelixScreen's own lib/lvgl - but that submodule has patches/*.patch
+    # applied to it, and some of those inject calls to app-side symbols
+    # (helix_crash_note_*) that only exist when linking the application. A
+    # standalone test build has no such symbols, so the configure succeeds, the
+    # compile succeeds, and every one of the twelve executables dies at link
+    # time with a wall of "Undefined symbols ... referenced from liblvgl.a"
+    # that says nothing about the real cause.
+    #
+    # Probing for the marker here turns that into one readable message.
+    set(HELIX_PATCH_PROBE_FILES
+        "${LVGL_DIR}/src/core/lv_obj_event.c"
+        "${LVGL_DIR}/src/core/lv_obj_tree.c"
+    )
+    set(HELIX_PATCHED_FILES "")
+    foreach(probe_file ${HELIX_PATCH_PROBE_FILES})
+        if(EXISTS "${probe_file}")
+            file(STRINGS "${probe_file}" probe_hits REGEX "helix_crash_note")
+            if(probe_hits)
+                list(APPEND HELIX_PATCHED_FILES "${probe_file}")
+            endif()
+        endif()
+    endforeach()
+    if(HELIX_PATCHED_FILES)
+        # One argument, and every line kept short: message() treats each
+        # argument as a paragraph and reflows anything long, which shreds a
+        # multi-argument message into unreadable fragments.
+        string(REPLACE ";" "\n      " HELIX_PATCHED_FILES_TEXT "${HELIX_PATCHED_FILES}")
+        message(FATAL_ERROR
+"LVGL_DIR is a PATCHED LVGL checkout, not a pristine upstream one.
+
+  LVGL_DIR = ${LVGL_DIR}
+
+  HelixScreen's crash-instrumentation marker (helix_crash_note) is in:
+      ${HELIX_PATCHED_FILES_TEXT}
+
+  That is HelixScreen's lib/lvgl submodule with patches/*.patch applied.
+  Those patches call app-side symbols (helix_crash_note_event,
+  helix_crash_note_sync_del, ...) that do not exist in a standalone test
+  build. The compile would succeed and every test executable would then
+  fail to link:
+      Undefined symbols for architecture <arch>:
+        \"_helix_crash_note_event\", referenced from:
+            _lv_obj_send_event in liblvgl.a
+  LVGL_DIR needs a PRISTINE upstream LVGL checkout. Either:
+    - drop -DLVGL_DIR and let FetchContent pull LVGL ${HELIX_LVGL_TAG}
+      (the default, and what CI uses), or
+    - clone upstream yourself:
+        git clone --depth 1 --branch ${HELIX_LVGL_TAG} \\
+            https://github.com/lvgl/lvgl.git /tmp/lvgl-pristine
+        cmake -S tests -B build -DLVGL_DIR=/tmp/lvgl-pristine
+  Do NOT unpatch HelixScreen's submodule to work around this - the
+  application needs those patches.")
+    endif()
+
     message(STATUS "helix-xml tests: using LVGL from LVGL_DIR=${LVGL_DIR}")
     set(HELIX_LVGL_SOURCE_DIR "${LVGL_DIR}")
     add_subdirectory("${LVGL_DIR}" "${CMAKE_BINARY_DIR}/lvgl-build" EXCLUDE_FROM_ALL)

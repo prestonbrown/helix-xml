@@ -38,6 +38,11 @@
 #include <stdint.h>
 #include <string.h>
 
+/* Log capture: every resolution failure here is reported ONLY as a LV_LOG_WARN -
+ * the attribute is dropped and the widget silently keeps its default, which is
+ * indistinguishable from "the XML never mentioned it". The log line is the
+ * assertion. */
+#include "helpers/helix_log_capture.h"
 #include "helpers/helix_test_env.h"
 #include "helpers/helix_test_pump.h"
 #include "helpers/xml_assert.h"
@@ -54,45 +59,6 @@ void setUp(void)
 void tearDown(void)
 {
     helix_test_env_teardown();
-}
-
-/*---------------------------------------------------------------------------
- * Log capture
- *
- * Every resolution failure in this file is reported ONLY as a LV_LOG_WARN - the
- * attribute is dropped and the widget silently keeps its default, which is
- * indistinguishable from "the XML never mentioned it". So the log line is the
- * assertion. lv_log_register_print_cb takes precedence over LV_LOG_PRINTF, so
- * installing one both captures the message and keeps the runner output clean.
- *--------------------------------------------------------------------------*/
-
-static char g_log_buf[4096];
-static size_t g_log_len;
-
-static void log_capture_cb(lv_log_level_t level, const char * buf)
-{
-    LV_UNUSED(level);
-    size_t n = strlen(buf);
-    if(g_log_len + n + 1 >= sizeof(g_log_buf)) return;
-    memcpy(g_log_buf + g_log_len, buf, n + 1);
-    g_log_len += n;
-}
-
-static void log_capture_start(void)
-{
-    g_log_buf[0] = '\0';
-    g_log_len = 0;
-    lv_log_register_print_cb(log_capture_cb);
-}
-
-static void log_capture_stop(void)
-{
-    lv_log_register_print_cb(NULL);
-}
-
-static bool log_contains(const char * needle)
-{
-    return strstr(g_log_buf, needle) != NULL;
 }
 
 /*---------------------------------------------------------------------------

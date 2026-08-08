@@ -59,6 +59,10 @@
     #include <others/translation/lv_translation.h>
 #endif
 
+/* Log capture: the scan reports every per-file problem through LV_LOG_WARN and
+ * keeps returning LV_RESULT_OK, so the log is the only channel that
+ * distinguishes "skipped a bad file" from "never saw it". */
+#include "helpers/helix_log_capture.h"
 #include "helpers/helix_test_env.h"
 #include "helpers/xml_assert.h"
 
@@ -92,45 +96,6 @@ void tearDown(void)
 #define PACK_MISSING ASSET_PATH("/pack_does_not_exist")
 #define FILE_NOT_DIR ASSET_PATH("/pack/load_card.xml")
 #define FILE_MISSING ASSET_PATH("/pack/no_such_file.xml")
-
-/*---------------------------------------------------------------------------
- * Log capture
- *
- * Same shape as the helper in tests/cases/test_base_types.c. Kept file-local
- * rather than promoted into tests/helpers/ so this file does not have to
- * co-own a shared header. Needed because the scan reports every per-file
- * problem through LV_LOG_WARN and keeps returning LV_RESULT_OK - the log is
- * the only channel that distinguishes "skipped a bad file" from "never saw it".
- *--------------------------------------------------------------------------*/
-
-static char g_log_buf[8192];
-static size_t g_log_len;
-
-static void log_capture_cb(lv_log_level_t level, const char * buf)
-{
-    LV_UNUSED(level);
-    size_t n = strlen(buf);
-    if(g_log_len + n + 1 >= sizeof(g_log_buf)) return;
-    memcpy(g_log_buf + g_log_len, buf, n + 1);
-    g_log_len += n;
-}
-
-static void log_capture_start(void)
-{
-    g_log_buf[0] = '\0';
-    g_log_len = 0;
-    lv_log_register_print_cb(log_capture_cb);
-}
-
-static void log_capture_stop(void)
-{
-    lv_log_register_print_cb(NULL);
-}
-
-static bool log_contains(const char * needle)
-{
-    return strstr(g_log_buf, needle) != NULL;
-}
 
 /*---------------------------------------------------------------------------
  * Helpers

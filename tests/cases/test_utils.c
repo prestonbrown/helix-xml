@@ -52,6 +52,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Log capture: a rejected value returns a plausible-looking colour/number, so
+ * the warning is the only thing that distinguishes "rejected" from "parsed". */
+#include "helpers/helix_log_capture.h"
 #include "helpers/helix_test_env.h"
 #include "helpers/xml_assert.h"
 
@@ -81,40 +84,6 @@ static void assert_color_rgb(lv_color_t c, uint8_t r, uint8_t g, uint8_t b, cons
     TEST_ASSERT_EQUAL_UINT8_MESSAGE(r, c.red, helix_xml_assert_msgf("%s: wrong red channel", what));
     TEST_ASSERT_EQUAL_UINT8_MESSAGE(g, c.green, helix_xml_assert_msgf("%s: wrong green channel", what));
     TEST_ASSERT_EQUAL_UINT8_MESSAGE(b, c.blue, helix_xml_assert_msgf("%s: wrong blue channel", what));
-}
-
-/*---------------------------------------------------------------------------
- * Log capture - a rejected value returns a plausible-looking colour/number, so
- * the warning is the only thing that distinguishes "rejected" from "parsed".
- *--------------------------------------------------------------------------*/
-
-static char g_log_buf[4096];
-static size_t g_log_len;
-
-static void log_capture_cb(lv_log_level_t level, const char * buf)
-{
-    LV_UNUSED(level);
-    size_t n = strlen(buf);
-    if(g_log_len + n + 1 >= sizeof(g_log_buf)) return;
-    memcpy(g_log_buf + g_log_len, buf, n + 1);
-    g_log_len += n;
-}
-
-static void log_capture_start(void)
-{
-    g_log_buf[0] = '\0';
-    g_log_len = 0;
-    lv_log_register_print_cb(log_capture_cb);
-}
-
-static void log_capture_stop(void)
-{
-    lv_log_register_print_cb(NULL);
-}
-
-static bool log_contains(const char * needle)
-{
-    return strstr(g_log_buf, needle) != NULL;
 }
 
 /*===========================================================================

@@ -37,6 +37,10 @@
 #include <stdint.h>
 #include <string.h>
 
+/* Log capture: for most converters the fallback value is also a legal parse
+ * result, so the LV_LOG_WARN is the only way to tell a rejected string from
+ * an accepted one. */
+#include "helpers/helix_log_capture.h"
 #include "helpers/helix_test_env.h"
 #include "helpers/xml_assert.h"
 
@@ -81,44 +85,6 @@ typedef struct {
                                       (table)[i_].in));                                  \
         }                                                                                \
     } while(0)
-
-/*---------------------------------------------------------------------------
- * Log capture
- *
- * For most converters the fallback value is also a legal parse result, so the
- * LV_LOG_WARN is the ONLY way to tell a rejected string from an accepted one.
- * lv_log_register_print_cb takes precedence over LV_LOG_PRINTF, so installing
- * one both captures the message and keeps the test output clean.
- *--------------------------------------------------------------------------*/
-
-static char g_log_buf[2048];
-static size_t g_log_len;
-
-static void log_capture_cb(lv_log_level_t level, const char * buf)
-{
-    LV_UNUSED(level);
-    size_t n = strlen(buf);
-    if(g_log_len + n + 1 >= sizeof(g_log_buf)) return;
-    memcpy(g_log_buf + g_log_len, buf, n + 1);
-    g_log_len += n;
-}
-
-static void log_capture_start(void)
-{
-    g_log_buf[0] = '\0';
-    g_log_len = 0;
-    lv_log_register_print_cb(log_capture_cb);
-}
-
-static void log_capture_stop(void)
-{
-    lv_log_register_print_cb(NULL);
-}
-
-static bool log_contains(const char * needle)
-{
-    return strstr(g_log_buf, needle) != NULL;
-}
 
 /*===========================================================================
  * lv_xml_state_to_enum

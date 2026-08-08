@@ -596,16 +596,20 @@ static void test_unregistering_a_count_subject_removes_its_global_observer(void)
 }
 
 /**
- * The other teardown order: unregister while the instance is still ALIVE. This
- * is the scope-sweep path (lv_xml_frag_record_free), a different function from
- * the instance-delete path above, and it has to detach the observer BEFORE the
- * record it points at is freed.
+ * The other teardown order: unregister while the instance is still ALIVE.
  *
- * Deleting the now-orphaned instance afterwards must also stay clean: the sweep
- * has to have removed the instance's pending delete callback too, or it fires on
- * a freed record.
+ * The scope is NOT freed here - it holds the lv_style_t storage the live widgets
+ * point at, so component_scope_retire() takes it out of the registry (no lookup
+ * can reach it) but defers the memory until the last instance is deleted. The
+ * frag record and its observer are part of that deferral, so the orphaned
+ * instance stays fully reactive against the definition it was built from rather
+ * than going inert. That is the point: nothing it depends on has been freed.
+ *
+ * Deleting it afterwards is the load-bearing half - the instance-delete hook has
+ * to detach the observer and reclaim the record, and it must find the record in
+ * the RETIRED scope's frag_ll, not in whatever answers to the name by then.
  */
-static void test_unregistering_while_the_instance_is_alive_removes_the_count_observer(void)
+static void test_unregistering_while_the_instance_is_alive_keeps_it_working(void)
 {
     init_global_count(3);
     ASSERT_XML_REGISTERS("rep_unreg_live", REPEAT_GLOBAL_XML);
@@ -617,18 +621,23 @@ static void test_unregistering_while_the_instance_is_alive_removes_the_count_obs
     TEST_ASSERT_EQUAL_UINT32(1, subject_observer_count(&s_global_count));
 
     TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_component_unregister("rep_unreg_live"));
+    TEST_ASSERT_NULL_MESSAGE(lv_xml_component_get_scope("rep_unreg_live"),
+                             "a retired scope must stop being findable immediately");
 
-    TEST_ASSERT_EQUAL_UINT32_MESSAGE(0, subject_observer_count(&s_global_count),
-                                     "the scope sweep left the count observer attached while "
-                                     "freeing the record it points at");
-
-    /* The widgets are still on screen and untouched; the repeat is simply inert now. */
+    /* Still reactive: the record, its observer and the scope behind them are all
+     * intact because the instance that needs them is still on screen. */
     lv_subject_set_int(&s_global_count, 9);
     helix_test_pump(30);
-    ASSERT_CHILD_COUNT(root, 3);
+    ASSERT_CHILD_COUNT(root, 9);
 
-    /* And the orphaned instance still deletes cleanly. */
+    /* Deleting the orphan detaches the observer and releases the held scope. */
     lv_obj_delete(v);
+    helix_test_pump(30);
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(0, subject_observer_count(&s_global_count),
+                                     "deleting the orphaned instance left the count observer "
+                                     "attached; the next change fires on freed memory");
+
+    lv_subject_set_int(&s_global_count, 99);
     helix_test_pump(30);
     TEST_ASSERT_EQUAL_UINT32(0, subject_observer_count(&s_global_count));
 }
@@ -700,7 +709,7 @@ int main(void)
     /* Observer lifetime */
     RUN_TEST(test_a_count_change_after_instance_delete_does_not_reach_a_dangling_observer);
     RUN_TEST(test_unregistering_a_count_subject_removes_its_global_observer);
-    RUN_TEST(test_unregistering_while_the_instance_is_alive_removes_the_count_observer);
+    RUN_TEST(test_unregistering_while_the_instance_is_alive_keeps_it_working);
     RUN_TEST(test_reinstantiation_does_not_accumulate_stale_observers);
 
     return UNITY_END();

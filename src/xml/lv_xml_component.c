@@ -62,14 +62,29 @@ static void process_subject_expr_element(lv_xml_parser_state_t * state, const ch
 static char * extract_view_content(const char * xml_definition);
 static style_prop_anim_type_t style_prop_anim_get_type(lv_style_prop_t prop);
 static void anim_exec_cb(lv_anim_t * a, int32_t v);
+static void component_scope_retire(lv_xml_component_scope_t * scope);
 static void component_scope_free(lv_xml_component_scope_t * scope);
 static void component_scope_drop_others(const char * name, const lv_xml_component_scope_t * keep);
+static void scope_instance_delete_cb(lv_event_t * e);
+static void scope_free_async_cb(void * scope_v);
 
 /**********************
  *  STATIC VARIABLES
  **********************/
 
 static lv_ll_t component_scope_ll;
+
+/** Scopes that were unregistered/replaced while instances of them were still on
+ *  screen. Out of `component_scope_ll`, so no lookup or foreach can reach them,
+ *  but still holding their style storage for those instances. Drained by the
+ *  async free once the last instance dies, and force-drained by
+ *  lv_xml_component_deinit(). Same node size as component_scope_ll, which is
+ *  what lets lv_ll_chg_list() move a node between the two. */
+static lv_ll_t pending_free_scope_ll;
+
+/** The `"globals"` scope: shared metadata, not a component, and never retired.
+ *  Kept so the instance counting can skip it explicitly. */
+static lv_xml_component_scope_t * global_scope_p;
 
 /**********************
  *      MACROS
@@ -82,12 +97,14 @@ static lv_ll_t component_scope_ll;
 void lv_xml_component_init(void)
 {
     lv_ll_init(&component_scope_ll, sizeof(lv_xml_component_scope_t));
+    lv_ll_init(&pending_free_scope_ll, sizeof(lv_xml_component_scope_t));
 
     lv_xml_component_scope_t * global_scope = lv_ll_ins_head(&component_scope_ll);
     lv_memzero(global_scope, sizeof(lv_xml_component_scope_t));
 
     lv_xml_component_scope_init(global_scope);
     global_scope->name = lv_strdup("globals");
+    global_scope_p = global_scope;
 }
 
 void lv_xml_component_scope_init(lv_xml_component_scope_t * scope)
@@ -99,10 +116,54 @@ void lv_xml_component_scope_init(lv_xml_component_scope_t * scope)
     lv_ll_init(&scope->subjects_ll, sizeof(lv_xml_subject_t));
     lv_ll_init(&scope->subject_expr_ll, sizeof(lv_xml_subject_expr_t));
     lv_ll_init(&scope->frag_ll, sizeof(xml_frag_record_t));
+    lv_ll_init(&scope->instance_ll, sizeof(lv_xml_scope_instance_t));
     lv_ll_init(&scope->event_ll, sizeof(lv_xml_event_cb_t));
     lv_ll_init(&scope->image_ll, sizeof(lv_xml_image_t));
     lv_ll_init(&scope->font_ll, sizeof(lv_xml_font_t));
     lv_ll_init(&scope->timeline_ll, sizeof(lv_xml_timeline_t));
+}
+
+void lv_xml_component_scope_instance_attach(lv_xml_component_scope_t * scope, lv_obj_t * view_root)
+{
+    if(scope == NULL) return;
+
+    /*The globals scope is shared metadata, not a component: nothing instantiates
+     *it and nothing ever retires it, so counting it would only add noise.*/
+    if(scope == global_scope_p) return;
+
+    /*A parse that produced no view root has no instance to protect and nowhere to
+     *hang the decrement. Counting it would pin the scope forever. Every caller
+     *treats a NULL root as a failed create and returns NULL, so nothing survives
+     *that could dangle - unlike the frag records, which warn here because they DO
+     *have a fallback path (the unregister-time sweep).*/
+    if(view_root == NULL) return;
+
+    lv_xml_scope_instance_t * inst = lv_ll_ins_head(&scope->instance_ll);
+    if(inst == NULL || lv_obj_add_event_cb(view_root, scope_instance_delete_cb, LV_EVENT_DELETE, inst) == NULL) {
+        /*Without the decrement hook the count would never come back down and the
+         *scope would be pinned for the rest of the process. Leaving the instance
+         *untracked restores exactly today's behaviour (the documented "delete
+         *instances before unregistering" precondition), which is the better of the
+         *two failures.*/
+        if(inst) lv_ll_remove(&scope->instance_ll, inst);
+        lv_free(inst);
+        LV_LOG_ERROR("OOM: no delete hook for an instance of '%s'; its scope is not lifetime-tracked",
+                     scope->name ? scope->name : "?");
+        return;
+    }
+
+    /*Only reachable through a stale caller-held pointer - the registry cannot hand
+     *out a retired scope. Its free may already be queued, so cancel it: this
+     *instance is about to depend on the very style storage that free would release.*/
+    if(scope->pending_free && scope->instance_cnt == 0) {
+        lv_async_call_cancel(scope_free_async_cb, scope);
+        LV_LOG_WARN("Creating an instance of '%s' from a scope that was already replaced/unregistered",
+                    scope->name ? scope->name : "?");
+    }
+
+    inst->root = view_root;
+    inst->scope = scope;
+    scope->instance_cnt++;
 }
 
 
@@ -380,8 +441,7 @@ lv_result_t lv_xml_component_unregister(const char * name)
     lv_xml_component_scope_t * scope = lv_xml_component_get_scope(name);
     if(scope == NULL) return LV_RESULT_INVALID;
 
-    lv_ll_remove(&component_scope_ll, scope);
-    component_scope_free(scope);
+    component_scope_retire(scope);
 
     return LV_RESULT_OK;
 }
@@ -400,6 +460,23 @@ void lv_xml_component_deinit(void)
         component_scope_free(scope);
     }
     lv_ll_init(&component_scope_ll, sizeof(lv_xml_component_scope_t));
+
+    /* Scopes deferred by component_scope_retire() are FORCE-freed here, live
+     * instances or not. This runs from lv_xml_deinit(), i.e. at process or
+     * per-test teardown where the widget tree is already gone (or is about to be
+     * torn down by lv_deinit()), so there is nothing left to keep the styles
+     * alive for - and honouring the deferral here would leak the scope
+     * permanently, since nothing would ever decrement it again. Each one may
+     * still have a queued async free naming it; cancel that first so the timer
+     * cannot fire on freed memory. */
+    while((scope = lv_ll_get_head(&pending_free_scope_ll)) != NULL) {
+        lv_async_call_cancel(scope_free_async_cb, scope);
+        lv_ll_remove(&pending_free_scope_ll, scope);
+        component_scope_free(scope);
+    }
+    lv_ll_init(&pending_free_scope_ll, sizeof(lv_xml_component_scope_t));
+
+    global_scope_p = NULL;
 }
 
 /**********************
@@ -413,20 +490,111 @@ static void component_scope_drop_others(const char * name, const lv_xml_componen
 {
     lv_xml_component_scope_t * scope = lv_ll_get_head(&component_scope_ll);
     while(scope != NULL) {
-        /* Read `next` before the node can be freed. */
+        /* Read `next` before the node can be unlinked or freed. */
         lv_xml_component_scope_t * next = lv_ll_get_next(&component_scope_ll, scope);
         if(scope != keep && scope->name != NULL && lv_streq(scope->name, name)) {
-            lv_ll_remove(&component_scope_ll, scope);
-            component_scope_free(scope);
+            component_scope_retire(scope);
         }
         scope = next;
     }
 }
 
-/** Release everything a scope owns, and the scope itself. The caller must have
- *  already unlinked it from `component_scope_ll`. */
+/**
+ * Take `scope` out of the live registry and reclaim it - but only once nothing
+ * is using it.
+ *
+ * The scope's `style_ll` holds the lv_style_t storage that every widget built
+ * from the component points AT: lv_obj_add_style() records the raw pointer, it
+ * does not copy. So freeing a scope whose instances are still on screen is a
+ * use-after-free on the next layout or draw pass. Re-registration used to leak
+ * the old scope, which accidentally kept those styles valid; making
+ * re-registration a real replacement turned that latent leak into a live UAF,
+ * and this is what closes it.
+ *
+ * The scope stops being FINDABLE immediately either way - it leaves
+ * `component_scope_ll` here, so a lookup after a hot reload returns the new
+ * definition, never this one. Only the memory is deferred, onto
+ * `pending_free_scope_ll`, until the last instance's LV_EVENT_DELETE brings the
+ * count to zero (scope_instance_delete_cb).
+ *
+ * With no live instances - the overwhelmingly common case: a plain unregister,
+ * or a reload of a component nothing has built yet - this is byte for byte the
+ * old behaviour, an unlink and an immediate free.
+ */
+static void component_scope_retire(lv_xml_component_scope_t * scope)
+{
+    if(scope->instance_cnt == 0) {
+        lv_ll_remove(&component_scope_ll, scope);
+        component_scope_free(scope);
+        return;
+    }
+
+    scope->pending_free = 1;
+    lv_ll_chg_list(&component_scope_ll, &pending_free_scope_ll, scope, true);
+    LV_LOG_INFO("Component '%s' replaced/unregistered with %" LV_PRIu32 " live instance(s); "
+                "its scope is held until the last one is deleted",
+                scope->name ? scope->name : "?", scope->instance_cnt);
+}
+
+/** LV_EVENT_DELETE on an instance's view root: drop this instance's claim on the
+ *  scope, and reclaim the scope if it was retired while this was the last one.
+ *
+ *  The free CANNOT happen here. LVGL sends LV_EVENT_DELETE to the root BEFORE it
+ *  destroys the subtree (obj_delete_core), and every one of those children is
+ *  still holding this scope's lv_style_t pointers - their own destructors run
+ *  lv_obj_remove_style_all() -> lv_obj_refresh_style(), which reads style
+ *  properties back off the object and its ancestors. Freeing the styles from
+ *  inside this callback would hand that walk freed memory, which is the same
+ *  bug one level down. So the release is pushed onto lv_async_call(), which runs
+ *  from the timer handler once the deletion has fully unwound. */
+static void scope_instance_delete_cb(lv_event_t * e)
+{
+    lv_xml_scope_instance_t * inst = (lv_xml_scope_instance_t *)lv_event_get_user_data(e);
+    if(inst == NULL) return;
+
+    lv_xml_component_scope_t * scope = inst->scope;
+
+    lv_ll_remove(&scope->instance_ll, inst);
+    lv_free(inst);                       /*the record IS the ll node (see lv_ll_ins_head)*/
+
+    if(scope->instance_cnt > 0) scope->instance_cnt--;
+    if(scope->instance_cnt != 0 || !scope->pending_free) return;
+
+    if(lv_async_call(scope_free_async_cb, scope) != LV_RESULT_OK) {
+        /*Leave it on the pending list rather than freeing it here: a late reclaim
+         *at lv_xml_component_deinit() is a bounded hold, freeing it now is a UAF.*/
+        LV_LOG_ERROR("OOM: couldn't schedule the release of scope '%s'; held until lv_xml_deinit()",
+                     scope->name ? scope->name : "?");
+    }
+}
+
+/** Timer-context tail of the above: the instance tree is fully destroyed by now,
+ *  so the scope's styles have no readers left. */
+static void scope_free_async_cb(void * scope_v)
+{
+    lv_xml_component_scope_t * scope = (lv_xml_component_scope_t *)scope_v;
+    lv_ll_remove(&pending_free_scope_ll, scope);
+    component_scope_free(scope);
+}
+
+/** Release everything a scope owns, and the scope itself. Unconditional: the
+ *  live-instance gate is in component_scope_retire(), and this is also the FORCE
+ *  path lv_xml_component_deinit() takes. The caller must have already unlinked it
+ *  from whichever list held it. */
 static void component_scope_free(lv_xml_component_scope_t * scope)
 {
+    /* Instances that outlive their scope: only reachable from the forced
+     * lv_xml_component_deinit() path, since the deferral is what keeps this
+     * function away from a scope that still has any. Their view roots each carry
+     * a pending scope_instance_delete_cb whose user data is a node in the list
+     * about to be freed, so the hooks come off before the nodes go - otherwise
+     * lv_deinit()'s own screen teardown fires them on freed memory. */
+    lv_xml_scope_instance_t * inst;
+    LV_LL_READ(&scope->instance_ll, inst) {
+        if(inst->root) lv_obj_remove_event_cb_with_user_data(inst->root, scope_instance_delete_cb, inst);
+    }
+    lv_ll_clear(&scope->instance_ll);
+
     lv_free((char *)scope->name);
     lv_free((char *)scope->view_def);
     lv_free((char *)scope->extends);

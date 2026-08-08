@@ -840,6 +840,372 @@ static void test_unregistering_with_a_live_instance_leaves_it_safe_to_delete(voi
 }
 
 /*===========================================================================
+ * Deferred scope teardown: a scope with live instances is not freed
+ *
+ * A component's `<styles>` live in the scope, and lv_obj_add_style() records the
+ * RAW lv_style_t* - it does not copy. So every widget an instance built points
+ * into scope->style_ll for as long as it is on screen, and freeing the scope out
+ * from under it is a use-after-free on the next layout or draw pass.
+ *
+ * This used to be masked: re-registering a name SHADOWED the old scope and
+ * leaked it, which accidentally kept the styles alive. Making re-registration a
+ * real replacement turned that leak into a live UAF, and HELIX_HOT_RELOAD
+ * re-registers on every file save - with the panel it belongs to still on
+ * screen. The scope is therefore retired (out of the registry, unfindable) but
+ * held until its last instance is deleted.
+ *
+ * HOW THESE TESTS PROVE IT, given there is no public "is this scope alive?":
+ *
+ *  - DEFER_V1_XML is deliberately FAT (a shared style, consts, and a
+ *    `<subject type="string">` whose two 256-byte buffers only the scope's own
+ *    ownership walk frees) and DEFER_V2_XML deliberately LEAN. Registering v2
+ *    over v1 therefore moves lv_mem free_size in opposite directions depending
+ *    on whether v1 was freed: DOWN if it was held (v2 allocated, nothing
+ *    returned), UP if it was freed (v1 returned more than v2 took). That sign is
+ *    the assertion, and it is unambiguous.
+ *  - ASSERT_STYLE_INT on the stale instance is the one that proves the BUG is
+ *    fixed rather than that a counter moved: it reads a property value back
+ *    through the raw lv_style_t* the widget is still holding.
+ *==========================================================================*/
+
+/* lv_mem_monitor() only reports anything under the BUILTIN allocator. An
+ * LV_STDLIB_CLIB build - which is what an ASAN run needs, so the sanitizer can
+ * see LVGL's allocations at all - answers zero to everything, and a heap
+ * assertion there would fail on the configuration rather than on the behaviour.
+ * Gate the accounting so the BEHAVIOURAL assertions below it still run: reading
+ * a property back through a stale instance's raw lv_style_t* is the assertion
+ * ASAN is there to adjudicate. */
+#if LV_USE_STDLIB_MALLOC == LV_STDLIB_BUILTIN
+    #define ASSERT_HEAP(cond, msg) TEST_ASSERT_TRUE_MESSAGE((cond), (msg))
+#else
+    #define ASSERT_HEAP(cond, msg) do { (void)(msg); } while(0)
+#endif
+
+/* v1: everything that costs the scope real heap AND a shared style the instance
+ * will hold a raw pointer to. */
+static const char * DEFER_V1_XML =
+    "<component>"
+    "  <consts><string name=\"cap\" value=\"version one\"/></consts>"
+    "  <styles>"
+    "    <style name=\"boxy\" pad_all=\"11\" radius=\"37\" border_width=\"5\"/>"
+    "  </styles>"
+    "  <subjects>"
+    "    <subject name=\"defer_text\" type=\"string\" value=\"v1\"/>"
+    "  </subjects>"
+    "  <view extends=\"lv_obj\" name=\"defer_root\">"
+    "    <lv_obj name=\"defer_box\"><style name=\"boxy\"/></lv_obj>"
+    "    <lv_label name=\"defer_label\" text=\"#cap\"/>"
+    "  </view>"
+    "</component>";
+
+/* v2: the same name, a different definition, and far leaner than v1. */
+static const char * DEFER_V2_XML =
+    "<component>"
+    "  <styles><style name=\"boxy\" pad_all=\"22\"/></styles>"
+    "  <view extends=\"lv_obj\" name=\"defer_root\">"
+    "    <lv_obj name=\"defer_box\"><style name=\"boxy\"/></lv_obj>"
+    "    <lv_label name=\"defer_label\" text=\"version two\"/>"
+    "  </view>"
+    "</component>";
+
+/** The `defer_box` of an instance, with its shared style still readable. */
+static void assert_defer_box_pad(lv_obj_t * inst, int32_t expected, const char * why)
+{
+    lv_obj_t * box = ASSERT_NAMED(inst, "defer_box");
+    TEST_ASSERT_EQUAL_INT32_MESSAGE(expected, lv_obj_get_style_pad_top(box, LV_PART_MAIN), why);
+    ASSERT_STYLE_INT(box, LV_STYLE_PAD_TOP, LV_PART_MAIN, expected);
+}
+
+/**
+ * Re-register a name while an instance of it is on screen: the old scope must
+ * NOT be freed, and the stale instance's shared style must still read back the
+ * value v1 wrote.
+ *
+ * Without the deferral the second half of this test reads a freed lv_style_t -
+ * which is exactly the shape that does not fault deterministically, so the heap
+ * assertion above it is what makes the failure reliable and ASAN is what makes
+ * it unambiguous.
+ */
+static void test_re_registering_with_a_live_instance_holds_the_old_scope(void)
+{
+    ASSERT_XML_REGISTERS("defer_comp", DEFER_V1_XML);
+
+    lv_obj_t * inst = XML_CREATE(helix_test_env_screen(), "defer_comp", NULL);
+    helix_test_pump(30);
+    assert_defer_box_pad(inst, 11, "the v1 shared style never reached the instance");
+
+    const size_t before = heap_free_size();
+    ASSERT_XML_REGISTERS("defer_comp", DEFER_V2_XML);
+    const size_t after = heap_free_size();
+
+    ASSERT_HEAP(
+        after < before,
+        "free_size ROSE across a re-registration that had a live instance - the old scope "
+        "was freed while widgets still held raw lv_style_t pointers into it");
+
+    /* The load-bearing assertion: read a real property value back through the
+     * pointer the widget is still holding. */
+    assert_defer_box_pad(inst, 11,
+                         "the stale instance's shared style no longer reads back - its scope "
+                         "was freed underneath it");
+    ASSERT_LABEL_TEXT(ASSERT_NAMED(inst, "defer_label"), "version one");
+}
+
+/**
+ * The mirror image, and the "unchanged when nothing is live" guarantee: with no
+ * instance on screen the old scope is freed immediately, so free_size moves the
+ * OTHER way - v1 returns more than the leaner v2 takes.
+ */
+static void test_re_registering_with_no_live_instance_frees_the_old_scope_at_once(void)
+{
+    ASSERT_XML_REGISTERS("defer_comp", DEFER_V1_XML);
+
+    const size_t before = heap_free_size();
+    ASSERT_XML_REGISTERS("defer_comp", DEFER_V2_XML);
+    const size_t after = heap_free_size();
+
+    ASSERT_HEAP(
+        after > before,
+        "free_size FELL across a re-registration with no live instance - the old scope was "
+        "deferred when it should have been freed on the spot");
+}
+
+/** A deferred scope is out of the registry the moment it is replaced: a lookup
+ *  must find the new definition, and foreach must see the name exactly once. */
+static void test_a_lookup_after_a_deferred_replacement_finds_the_new_definition(void)
+{
+    ASSERT_XML_REGISTERS("defer_comp", DEFER_V1_XML);
+    lv_obj_t * stale = XML_CREATE(helix_test_env_screen(), "defer_comp", NULL);
+    helix_test_pump(30);
+
+    ASSERT_XML_REGISTERS("defer_comp", DEFER_V2_XML);
+
+    name_collector_t c = {{NULL}, 0};
+    lv_xml_component_foreach(collect_name_cb, &c);
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(2, c.count,
+                                     "expected globals + ONE defer_comp; the deferred scope is "
+                                     "still enumerated, so it is still findable");
+
+    /* What builds now is v2 - the held scope is memory only, not a definition. */
+    lv_obj_t * fresh = XML_CREATE(helix_test_env_screen(), "defer_comp", NULL);
+    helix_test_pump(30);
+    ASSERT_LABEL_TEXT(ASSERT_NAMED(fresh, "defer_label"), "version two");
+    assert_defer_box_pad(fresh, 22, "a lookup after the replacement built the OLD definition");
+
+    /* ...while the stale instance still reads v1. Both definitions coexist. */
+    assert_defer_box_pad(stale, 11, "the stale instance stopped reading its own definition");
+}
+
+/**
+ * Deleting the last instance is what releases the held scope. The release is
+ * pushed onto lv_async_call() rather than run from the LV_EVENT_DELETE handler:
+ * LVGL sends that event to the view root BEFORE destroying the subtree, and
+ * every child's destructor still reads style properties off itself and its
+ * ancestors. So the pump is not decoration here - it is when the free happens.
+ */
+static void test_deleting_the_last_instance_releases_the_deferred_scope(void)
+{
+    ASSERT_XML_REGISTERS("defer_comp", DEFER_V1_XML);
+    lv_obj_t * inst = XML_CREATE(helix_test_env_screen(), "defer_comp", NULL);
+    helix_test_pump(30);
+
+    ASSERT_XML_REGISTERS("defer_comp", DEFER_V2_XML);
+    const size_t held = heap_free_size();
+
+    lv_obj_delete(inst);
+    helix_test_pump(30);
+    const size_t released = heap_free_size();
+
+    /* The scope-owned `<subject type="string">` alone carries two 256-byte
+     * buffers, so anything at or below that is the scope not coming back. */
+    ASSERT_HEAP(
+        released > held + 512,
+        "deleting the last instance did not return the deferred scope - it is now leaked "
+        "until lv_xml_deinit()");
+}
+
+/** Two live instances: the scope is released only when the SECOND one dies. */
+static void test_a_deferred_scope_outlives_all_but_the_last_instance(void)
+{
+    ASSERT_XML_REGISTERS("defer_comp", DEFER_V1_XML);
+    lv_obj_t * a = XML_CREATE(helix_test_env_screen(), "defer_comp", NULL);
+    lv_obj_t * b = XML_CREATE(helix_test_env_screen(), "defer_comp", NULL);
+    helix_test_pump(30);
+
+    ASSERT_XML_REGISTERS("defer_comp", DEFER_V2_XML);
+    const size_t held = heap_free_size();
+
+    lv_obj_delete(a);
+    helix_test_pump(30);
+    const size_t after_first = heap_free_size();
+
+    /* b is still using the scope's styles, so they had better still be there. */
+    assert_defer_box_pad(b, 11,
+                         "the scope was released while a second instance was still using it");
+
+    lv_obj_delete(b);
+    helix_test_pump(30);
+    const size_t after_second = heap_free_size();
+
+    /* a and b are identical trees, so the two deletes return the same widget
+     * memory. The scope rides on the second one and nothing else does. */
+    const size_t first_delta = after_first - held;
+    const size_t second_delta = after_second - after_first;
+    ASSERT_HEAP(
+        second_delta > first_delta + 512,
+        helix_xml_assert_msgf(
+            "the two deletes returned comparable amounts (%u then %u bytes) - the scope was "
+            "not being held for the second instance",
+            (unsigned)first_delta, (unsigned)second_delta));
+}
+
+/**
+ * A nested component instance is an instance of ITS OWN scope, not its host's.
+ * The count is taken in lv_xml_create_in_scope(), which both the top-level path
+ * (lv_xml_create) and the nested one (lv_xml_component_process) funnel through -
+ * miss that and hot-reloading a leaf component while a panel that embeds it is
+ * on screen frees the leaf's styles under the panel.
+ */
+static void test_a_nested_instance_counts_against_its_own_scope(void)
+{
+    ASSERT_XML_REGISTERS("defer_comp", DEFER_V1_XML);
+    ASSERT_XML_REGISTERS("defer_host",
+                         "<component><view extends=\"lv_obj\" name=\"host_root\">"
+                         "<defer_comp name=\"embedded\"/></view></component>");
+
+    lv_obj_t * host = XML_CREATE(helix_test_env_screen(), "defer_host", NULL);
+    helix_test_pump(30);
+    lv_obj_t * nested = ASSERT_NAMED(host, "embedded");
+    assert_defer_box_pad(nested, 11, "the nested instance never got the v1 style");
+
+    /* Only the LEAF is re-registered; the host is untouched and stays on screen. */
+    const size_t before = heap_free_size();
+    ASSERT_XML_REGISTERS("defer_comp", DEFER_V2_XML);
+    const size_t held = heap_free_size();
+
+    ASSERT_HEAP(held < before,
+                "the leaf's scope was freed although a NESTED instance of it was "
+                "still on screen - the nested create path is not counted");
+    assert_defer_box_pad(nested, 11,
+                         "the nested instance's shared style no longer reads back");
+
+    /* Deleting the HOST takes the nested root with it, which is what releases
+     * the leaf's scope. */
+    lv_obj_delete(host);
+    helix_test_pump(30);
+    ASSERT_HEAP(heap_free_size() > held + 512,
+                "deleting the host did not release the leaf's deferred scope");
+}
+
+/**
+ * The actual HELIX_HOT_RELOAD loop, run to a steady state: save the file,
+ * re-register over a live panel, let the panel be rebuilt and the old instance
+ * deleted. Every round has to give back exactly what it took.
+ *
+ * A deferral that never fires is the failure mode this catches, and it is a
+ * quiet one - the engine keeps working, it just accumulates a full scope per
+ * save, which is precisely the leak the replacement was introduced to fix.
+ * Compared cycle-to-cycle, discarding cycle 0, for the reason documented on the
+ * unregister accounting test above.
+ */
+static void test_repeated_hot_reload_with_a_live_instance_reaches_a_steady_heap(void)
+{
+    size_t after_cycle[5];
+
+    for(int i = 0; i < 5; i++) {
+        ASSERT_XML_REGISTERS("defer_comp", DEFER_V1_XML);
+        lv_obj_t * inst = XML_CREATE(helix_test_env_screen(), "defer_comp", NULL);
+        helix_test_pump(30);
+
+        /* The save: the old definition is retired with its instance still up. */
+        ASSERT_XML_REGISTERS("defer_comp", DEFER_V2_XML);
+        assert_defer_box_pad(inst, 11, "the stale instance lost its style mid-reload");
+
+        /* The rebuild: the panel drops the old instance, which releases v1. */
+        lv_obj_delete(inst);
+        helix_test_pump(30);
+
+        TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_component_unregister("defer_comp"));
+        after_cycle[i] = heap_free_size();
+    }
+
+    for(int i = 2; i < 5; i++) {
+        ASSERT_HEAP(
+            after_cycle[1] == after_cycle[i],
+            helix_xml_assert_msgf(
+                "hot-reload cycle %d did not return the heap to where cycle 1 left it (%u vs %u) "
+                "- a deferred scope is never being released", i,
+                (unsigned)after_cycle[i], (unsigned)after_cycle[1]));
+    }
+}
+
+/**
+ * lv_xml_deinit() FORCE-frees a deferred scope, live instances or not. It runs at
+ * process (and per-test) teardown where everything is going away anyway, and
+ * honouring the deferral there would leak the scope permanently - nothing would
+ * ever decrement it again, and the per-test isolation this whole suite depends on
+ * would drift a scope per cycle.
+ *
+ * The instance is left ON SCREEN across the deinit on purpose: its view root
+ * still carries the delete hook whose user data lives inside the scope being
+ * freed, so the force path has to disarm it. If it does not, the lv_obj_clean()
+ * at the end fires that hook on freed memory.
+ *
+ * Measured as CONTROL vs DEFERRED rather than cycle-to-cycle, because an
+ * lv_xml_deinit()/lv_xml_init() round trip with widgets on screen moves the heap
+ * by a few dozen bytes on its own (LVGL-side, present with the XML engine doing
+ * nothing at all). Both halves below run the identical sequence except for when
+ * the instance is deleted, so everything but the held scope cancels out and the
+ * remaining difference is v1's payload - roughly 1 KB against that noise floor.
+ */
+static void test_deinit_force_frees_a_scope_that_still_has_live_instances(void)
+{
+    /* CONTROL: the instance is gone before v1 is replaced, so v1 is freed on the
+     * spot and lv_xml_deinit() has only v2 + the engine's own registries left. */
+    ASSERT_XML_REGISTERS("defer_comp", DEFER_V1_XML);
+    lv_obj_t * inst = XML_CREATE(helix_test_env_screen(), "defer_comp", NULL);
+    helix_test_pump(30);
+    lv_obj_delete(inst);
+    helix_test_pump(30);
+    ASSERT_XML_REGISTERS("defer_comp", DEFER_V2_XML);
+
+    const size_t control_before = heap_free_size();
+    lv_xml_deinit();
+    const size_t control_returned = heap_free_size() - control_before;
+
+    lv_xml_init();
+    lv_obj_clean(helix_test_env_screen());
+    helix_test_pump(30);
+
+    /* DEFERRED: same sequence, instance still on screen when v1 is replaced. */
+    ASSERT_XML_REGISTERS("defer_comp", DEFER_V1_XML);
+    inst = XML_CREATE(helix_test_env_screen(), "defer_comp", NULL);
+    helix_test_pump(30);
+    assert_defer_box_pad(inst, 11, "the v1 shared style never reached the instance");
+    ASSERT_XML_REGISTERS("defer_comp", DEFER_V2_XML);
+
+    const size_t deferred_before = heap_free_size();
+    lv_xml_deinit();
+    const size_t deferred_returned = heap_free_size() - deferred_before;
+
+    ASSERT_HEAP(
+        deferred_returned > control_returned + 512,
+        helix_xml_assert_msgf(
+            "lv_xml_deinit() returned %u bytes with a deferred scope held vs %u without it - "
+            "it is honouring the deferral instead of forcing the free, so the scope is leaked "
+            "for good",
+            (unsigned)deferred_returned, (unsigned)control_returned));
+
+    /* The orphaned widgets are still on screen and their delete hooks pointed
+     * into the scope that was just force-freed. Deleting them must not reach
+     * into it - a plain run survives this by luck, ASAN does not. */
+    lv_xml_init();
+    lv_obj_clean(helix_test_env_screen());
+    helix_test_pump(30);
+    ASSERT_CHILD_COUNT(helix_test_env_screen(), 0);
+}
+
+/*===========================================================================
  * Naming the instance root
  *
  * Three names compete for the root object of a component instance, and the
@@ -1014,6 +1380,15 @@ int main(void)
     RUN_TEST(test_unregistering_a_component_removes_its_scope_owned_subject);
     RUN_TEST(test_unregistering_a_component_does_not_free_a_borrowed_subject);
     RUN_TEST(test_unregistering_with_a_live_instance_leaves_it_safe_to_delete);
+
+    RUN_TEST(test_re_registering_with_a_live_instance_holds_the_old_scope);
+    RUN_TEST(test_re_registering_with_no_live_instance_frees_the_old_scope_at_once);
+    RUN_TEST(test_a_lookup_after_a_deferred_replacement_finds_the_new_definition);
+    RUN_TEST(test_deleting_the_last_instance_releases_the_deferred_scope);
+    RUN_TEST(test_a_deferred_scope_outlives_all_but_the_last_instance);
+    RUN_TEST(test_a_nested_instance_counts_against_its_own_scope);
+    RUN_TEST(test_repeated_hot_reload_with_a_live_instance_reaches_a_steady_heap);
+    RUN_TEST(test_deinit_force_frees_a_scope_that_still_has_live_instances);
 
     return UNITY_END();
 }

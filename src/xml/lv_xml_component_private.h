@@ -40,16 +40,43 @@ struct _lv_xml_component_scope_t {
     lv_ll_t subjects_ll;
     lv_ll_t subject_expr_ll;   /**< <subject_expr> derived subjects: (expr, ctx) pairs freed at scope teardown */
     lv_ll_t frag_ll;           /**< subject-bound <repeat>/<if> records (xml_frag_record_t): retained capture + observer, freed at scope teardown */
+    lv_ll_t instance_ll;       /**< one lv_xml_scope_instance_t per live instance; see `instance_cnt` */
     lv_ll_t timeline_ll;
     lv_ll_t font_ll;
     lv_ll_t image_ll;
     lv_ll_t event_ll;
     const char * view_def;
     const char * extends;
+    /** Live instances built from this scope: one per view root created by
+     *  lv_xml_create_in_scope(), decremented by that root's LV_EVENT_DELETE.
+     *  Gates the scope's own teardown - see `pending_free`. Kept alongside
+     *  `instance_ll` rather than derived from it so the gate stays O(1) and
+     *  reads as what it is; the list exists for the one thing a bare counter
+     *  cannot do, namely disarming the delete handlers of instances that
+     *  outlive the engine at lv_xml_component_deinit(). */
+    uint32_t instance_cnt;
     uint32_t is_widget : 1;
     uint32_t is_screen : 1;
+    /** Set when a free was requested while `instance_cnt` was non-zero. The
+     *  scope is already out of the live registry (moved to the pending-free
+     *  list) so lookups cannot find it, but its lv_style_t storage is still
+     *  handed out to the surviving instances, so the memory is held until the
+     *  last one is deleted. See component_scope_retire(). */
+    uint32_t pending_free : 1;
     struct _lv_xml_component_scope_t * next;
 };
+
+/**
+ * One live instance of a component scope. Allocated as a node in
+ * `scope->instance_ll` and handed to the view root's LV_EVENT_DELETE handler as
+ * its user data, which makes the decrement O(1) and gives
+ * lv_xml_component_deinit() something to walk when it has to disarm the handler
+ * of an instance that is about to outlive its scope.
+ */
+typedef struct {
+    lv_obj_t * root;                     /**< the instance's view root */
+    lv_xml_component_scope_t * scope;    /**< the scope that built it (owns this node) */
+} lv_xml_scope_instance_t;
 
 typedef struct {
     const char * name;
@@ -93,13 +120,25 @@ typedef struct {
  * from `frag_ll` when the instance is deleted. Because the bound subject is
  * shared (a scope subject reused across instances, or a global), an observer that
  * outlived its instance would fire the rebuild on freed roots (use-after-free).
- * The `frag_ll` walk in lv_xml_component_unregister is the fallback for records
- * whose instances are still alive at unregister; it also removes the pending
- * delete callback so it cannot fire on an already-freed record.
+ * The `frag_ll` walk in component_scope_free() is the fallback for records whose
+ * instances are somehow still alive when the scope goes; it also removes the
+ * pending delete callback so it cannot fire on an already-freed record. Since a
+ * scope with live instances is now HELD rather than freed, that fallback is only
+ * reached on the forced teardown in lv_xml_component_deinit() and for records
+ * that never had a view root to hang the delete callback on.
  */
 typedef struct {
     lv_obj_t *      parent;         /* enclosing element the expansion's children attach to */
     lv_obj_t *      view_root;      /* instance view root; its LV_EVENT_DELETE reclaims this record */
+    /* The scope whose `frag_ll` owns this record. Held as a pointer rather than
+     * re-derived from `scope.name`: a hot reload replaces the definition under
+     * the same name while this instance is still alive, and a by-name lookup at
+     * delete time would then return the NEW scope and lv_ll_remove() this node
+     * from a list it was never in - which leaves the OLD scope's frag_ll head
+     * pointing at freed memory. The pointer stays valid because a scope with
+     * live instances is never freed (see `pending_free`). NULL only for records
+     * that never found a registered home. */
+    lv_xml_component_scope_t * owner_scope;
     lv_subject_t *  count_subject;  /* the bound count subject (<repeat>-specific) */
     lv_observer_t * observer;       /* retained so teardown can detach before the subject is freed */
     void *          capture;        /* xml_frag_capture_t*, the retained body events (owned) */
@@ -151,6 +190,29 @@ void lv_xml_component_deinit(void);
  * @param scope     pointer to a component contexts
  */
 void lv_xml_component_scope_init(lv_xml_component_scope_t * scope);
+
+/**
+ * Count one live instance of `scope` and tie its lifetime to `view_root`.
+ *
+ * Widgets built from a component hold RAW `lv_style_t *` pointers into their
+ * scope's `style_ll`, so the scope must outlive every instance it produced.
+ * This is the one place that establishes that: the count is incremented here
+ * and decremented from an LV_EVENT_DELETE handler on `view_root`, and
+ * `component_scope_free()` refuses to free while the count is non-zero.
+ *
+ * Called from lv_xml_create_in_scope(), which is the single funnel every
+ * instance passes through - top-level (`lv_xml_create`, `lv_xml_create_screen`)
+ * and nested (`lv_xml_component_process`) alike, so a nested component counts
+ * against ITS OWN scope, not its host's.
+ *
+ * No-op for the `"globals"` scope (not a component; never retired) and for a
+ * NULL `view_root` (degenerate parse - there is no instance to protect and
+ * nowhere to hang the decrement, so nothing is counted).
+ *
+ * @param scope      the scope the instance was built from
+ * @param view_root  the instance's view root; may be NULL
+ */
+void lv_xml_component_scope_instance_attach(lv_xml_component_scope_t * scope, lv_obj_t * view_root);
 
 /**
  * Detach the observer and free the retained body/snapshots of a subject-bound

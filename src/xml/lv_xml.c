@@ -414,6 +414,19 @@ void * lv_xml_create_in_scope(lv_obj_t * parent, lv_xml_component_scope_t * pare
 
     create_timeline_instances(&state);
 
+    /*Register the instance against the scope that built it. This is the single
+     *funnel every component instance passes through - lv_xml_create() and
+     *lv_xml_create_screen() for a top-level one, lv_xml_component_process() for a
+     *nested one, which is why a nested instance counts against ITS OWN scope. The
+     *scope may not be freed while the count is non-zero: state.view and its whole
+     *subtree hold raw lv_style_t pointers into scope->style_ll.
+     *
+     *Done LAST, after the parse: every nested instance created during it has
+     *already registered, so the delete hooks come off in child-before-parent order
+     *within one view root (LVGL fires LV_EVENT_DELETE callbacks in registration
+     *order), which is also the order the frag records rely on.*/
+    lv_xml_component_scope_instance_attach(scope, state.view);
+
     xml_state_free_composed(&state);
     lv_ll_clear(&state.parent_ll);
     free_pcdata_ll(&state);
@@ -1742,6 +1755,7 @@ static xml_frag_record_t * xml_frag_retain(lv_xml_parser_state_t * state, xml_fr
 
     lv_memzero(r, sizeof(*r));
     r->capture = cap;                 /*ownership moves into the record*/
+    r->owner_scope = reg;             /*the frag_ll this node lives in; see the field's comment*/
 
     lv_obj_t ** tail = lv_ll_get_tail(&state->parent_ll);
     r->parent = tail ? *tail : state->parent;
@@ -1817,9 +1831,12 @@ static void xml_frag_instance_delete_cb(lv_event_t * e)
     xml_frag_record_t * r = (xml_frag_record_t *)lv_event_get_user_data(e);
     if(r == NULL) return;
 
-    /*Recover the registered scope by name before freeing anything (scope is a value
-     *member, untouched by free_heap, so the name stays valid until lv_free(r)).*/
-    lv_xml_component_scope_t * reg = lv_xml_component_get_scope(r->scope.name);
+    /*The owning scope is the one this node was inserted into, NOT whatever answers
+     *to the name today: a hot reload replaces the definition under the same name
+     *while this instance is still alive, so a by-name lookup would unlink the node
+     *from the NEW scope's frag_ll and leave the old one's head dangling. The
+     *pointer is safe to hold because a scope with live instances is never freed.*/
+    lv_xml_component_scope_t * reg = r->owner_scope;
 
     xml_frag_record_free_heap(r);
 
@@ -1827,8 +1844,11 @@ static void xml_frag_instance_delete_cb(lv_event_t * e)
     lv_free(r);                       /*the record IS the ll node (see lv_ll_ins_tail)*/
 }
 
-/** Free a fragment record from the scope-teardown path (records whose instances
- *  are still alive at unregister). Removes the pending instance-delete cb first so
+/** Free a fragment record from the scope-teardown path - records whose instances
+ *  are still alive when the scope itself goes away. A scope with live instances
+ *  is now held rather than freed, so that is the forced lv_xml_component_deinit()
+ *  teardown, plus records that never had a view root to hang the instance-delete
+ *  cb on. Removes the pending instance-delete cb first so
  *  it cannot fire on the freed record after the instance is later deleted, then
  *  frees the record heap. The node itself is freed by the caller's lv_ll_clear. */
 void lv_xml_frag_record_free(xml_frag_record_t * r)

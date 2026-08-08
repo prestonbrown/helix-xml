@@ -625,18 +625,17 @@ static void test_unregister_after_deleting_the_instance_detaches_the_cond(void)
 /**
  * The harder order: unregister WHILE the instance is still alive.
  *
- * The instance-delete hook has NOT fired yet, so the frag_ll sweep is the only
- * thing that can call lv_xml_expr_unbind on the record's bind. If it does not,
- * the cond observers are still sitting on the global when it changes below (UAF),
- * and the bind's delete-cb is still armed on the view root, double-freeing when
- * the view is deleted afterwards.
+ * Unregistering does not free the scope while instances of it are on screen -
+ * the widgets hold raw lv_style_t pointers into it - so the record, its bind and
+ * the cond observers all survive with it and the orphaned instance keeps
+ * flipping. Asserting the flip is what proves nothing was torn out from under a
+ * live instance; the old contract swept the record here and left the instance
+ * inert, which was only "safe" because the styles it kept using were freed too.
  *
- * Both consequences are asserted rather than merely survived: the still-live
- * instance must NOT rebuild in response to the change (proving the observers were
- * detached, not just that nothing crashed), and deleting it afterwards must leave
- * a clean screen.
+ * Deleting it afterwards is the other half: the bind's delete-cb and the record's
+ * are both still armed on the view root, and they must unwind exactly once.
  */
-static void test_unregister_while_the_instance_is_alive_detaches_the_cond(void)
+static void test_unregister_while_the_instance_is_alive_keeps_the_cond_live(void)
 {
     global_cond_register(1);
     ASSERT_XML_REGISTERS("if_unreg_alive", COMP_GLOBAL_COND);
@@ -649,16 +648,18 @@ static void test_unregister_while_the_instance_is_alive_detaches_the_cond(void)
     TEST_ASSERT_EQUAL_INT_MESSAGE(LV_RESULT_OK,
                                   (int)lv_xml_component_unregister("if_unreg_alive"),
                                   "unregistering a component with a live instance failed");
+    TEST_ASSERT_NULL_MESSAGE(lv_xml_component_get_scope("if_unreg_alive"),
+                             "a retired scope must stop being findable immediately");
 
     lv_subject_set_int(&s_global_cond, 0);
     helix_test_pump(30);
 
-    /* The observers are gone, so the orphaned instance keeps the branch it had.
-     * A rebuild here would mean the sweep left them attached. */
-    ASSERT_NAMED(view, "t");
-    ASSERT_NO_NAMED(view, "f");
+    /* Still bound: the deferred scope kept the record, the bind and the captured
+     * body alive for the instance that is still using them. */
+    ASSERT_NAMED(view, "f");
+    ASSERT_NO_NAMED(view, "t");
 
-    /* And the bind's delete hook is gone too: this must not double-free. */
+    /* And the delete hooks unwind exactly once: this must not double-free. */
     lv_obj_delete(view);
     helix_test_pump(30);
     ASSERT_CHILD_COUNT(screen, 0);
@@ -728,7 +729,7 @@ int main(void)
 
     RUN_TEST(test_a_cond_change_after_the_instance_is_deleted_is_harmless);
     RUN_TEST(test_unregister_after_deleting_the_instance_detaches_the_cond);
-    RUN_TEST(test_unregister_while_the_instance_is_alive_detaches_the_cond);
+    RUN_TEST(test_unregister_while_the_instance_is_alive_keeps_the_cond_live);
     RUN_TEST(test_re_instantiation_does_not_accumulate_stale_observers);
 
     return UNITY_END();

@@ -59,6 +59,25 @@ lv_result_t lv_xml_register_widget(const char * name, lv_xml_widget_create_cb_t 
     return LV_RESULT_OK;
 }
 
+void lv_xml_widget_deinit(void)
+{
+    /* Every node and every node->name came from the heap in
+     * lv_xml_register_widget(). Without this the list is not merely leaked:
+     * `widget_processor_head` is a file static, so after lv_deinit() reclaims
+     * LVGL's pool it points at freed memory. The next lv_xml_init() pushes
+     * fresh nodes onto that garbage and the first lv_xml_create() walks the
+     * list forever - a hang, not a crash. Resetting the head is the load-bearing
+     * half; freeing the nodes is the other. */
+    lv_widget_processor_t * p = widget_processor_head;
+    while(p) {
+        lv_widget_processor_t * next = p->next;
+        lv_free((void *)p->name);
+        lv_free(p);
+        p = next;
+    }
+    widget_processor_head = NULL;
+}
+
 lv_widget_processor_t * lv_xml_widget_get_processor(const char * name)
 {
     /* Select the widget specific parser type based on the name */

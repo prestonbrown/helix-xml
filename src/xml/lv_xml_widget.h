@@ -55,6 +55,15 @@ lv_result_t lv_xml_register_widget(const char * name, lv_xml_widget_create_cb_t 
                                    lv_xml_widget_apply_cb_t apply_cb);
 
 /**
+ * Free every registered Widget descriptor and reset the registry to empty.
+ *
+ * Called from lv_xml_deinit(). Must be called before lv_deinit(), because the
+ * nodes live in LVGL's heap. After this an lv_xml_init()/lv_xml_create() cycle
+ * starts from a clean registry.
+ */
+void lv_xml_widget_deinit(void);
+
+/**
  * Get a descriptor that was created when the Widget was registered.
  * @param name      The name that was used when the Widget was registered
  * @return          The descriptor of the Widget

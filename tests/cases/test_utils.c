@@ -83,6 +83,40 @@ static void assert_color_rgb(lv_color_t c, uint8_t r, uint8_t g, uint8_t b, cons
     TEST_ASSERT_EQUAL_UINT8_MESSAGE(b, c.blue, helix_xml_assert_msgf("%s: wrong blue channel", what));
 }
 
+/*---------------------------------------------------------------------------
+ * Log capture - a rejected value returns a plausible-looking colour/number, so
+ * the warning is the only thing that distinguishes "rejected" from "parsed".
+ *--------------------------------------------------------------------------*/
+
+static char g_log_buf[4096];
+static size_t g_log_len;
+
+static void log_capture_cb(lv_log_level_t level, const char * buf)
+{
+    LV_UNUSED(level);
+    size_t n = strlen(buf);
+    if(g_log_len + n + 1 >= sizeof(g_log_buf)) return;
+    memcpy(g_log_buf + g_log_len, buf, n + 1);
+    g_log_len += n;
+}
+
+static void log_capture_start(void)
+{
+    g_log_buf[0] = '\0';
+    g_log_len = 0;
+    lv_log_register_print_cb(log_capture_cb);
+}
+
+static void log_capture_stop(void)
+{
+    lv_log_register_print_cb(NULL);
+}
+
+static bool log_contains(const char * needle)
+{
+    return strstr(g_log_buf, needle) != NULL;
+}
+
 /*===========================================================================
  * lv_xml_get_value_of
  *==========================================================================*/
@@ -317,49 +351,105 @@ static void test_atof_split_handles_empty_and_malformed_input(void)
  * lv_xml_to_color
  *==========================================================================*/
 
+/**
+ * The accepted grammar: an optional "#" or "0x"/"0X", then EXACTLY 3, 6 or 8
+ * hex digits, then end of string. Digit count - not string length - is what
+ * selects the expander.
+ */
 static void test_to_color_accepts_every_documented_format(void)
 {
-    /* 3-digit forms - anything <= 5 chars goes through lv_color_hex3(). */
+    log_capture_start();
+
+    /* 3 digits -> lv_color_hex3(), each nibble doubled. */
     assert_color_rgb(lv_xml_to_color("fff"), 0xFF, 0xFF, 0xFF, "\"fff\"");
     assert_color_rgb(lv_xml_to_color("#fff"), 0xFF, 0xFF, 0xFF, "\"#fff\"");
     assert_color_rgb(lv_xml_to_color("0xfff"), 0xFF, 0xFF, 0xFF, "\"0xfff\"");
     assert_color_rgb(lv_xml_to_color("abc"), 0xAA, 0xBB, 0xCC, "\"abc\"");
     assert_color_rgb(lv_xml_to_color("#f00"), 0xFF, 0x00, 0x00, "\"#f00\"");
 
-    /* 6-digit forms - anything > 5 chars goes through lv_color_hex(). */
+    /* 6 digits -> RRGGBB. */
     assert_color_rgb(lv_xml_to_color("ffffff"), 0xFF, 0xFF, 0xFF, "\"ffffff\"");
     assert_color_rgb(lv_xml_to_color("#ffffff"), 0xFF, 0xFF, 0xFF, "\"#ffffff\"");
     assert_color_rgb(lv_xml_to_color("0xffffff"), 0xFF, 0xFF, 0xFF, "\"0xffffff\"");
+    assert_color_rgb(lv_xml_to_color("0Xffffff"), 0xFF, 0xFF, 0xFF, "\"0Xffffff\"");
     assert_color_rgb(lv_xml_to_color("#ff0000"), 0xFF, 0x00, 0x00, "\"#ff0000\"");
     assert_color_rgb(lv_xml_to_color("#0080FF"), 0x00, 0x80, 0xFF, "\"#0080FF\"");
+
+    /* 8 digits -> AARRGGBB. lv_color_t has no alpha channel, so the leading
+     * byte is dropped by design; opacity is a separate `*_opa` attribute. */
+    assert_color_rgb(lv_xml_to_color("#12345678"), 0x34, 0x56, 0x78, "\"#12345678\"");
+    /* The high bit set is the case a strtol-based parse would saturate away. */
+    assert_color_rgb(lv_xml_to_color("#FF112233"), 0x11, 0x22, 0x33, "\"#FF112233\"");
+
+    log_capture_stop();
+    TEST_ASSERT_FALSE_MESSAGE(log_contains("is not a valid color"),
+                              "a well-formed literal must not warn");
 }
 
 static void test_to_color_treats_unparseable_input_as_black(void)
 {
+    log_capture_start();
     assert_color_rgb(lv_xml_to_color(""), 0, 0, 0, "empty string");
     assert_color_rgb(lv_xml_to_color("#"), 0, 0, 0, "\"#\"");
     assert_color_rgb(lv_xml_to_color("#zzz"), 0, 0, 0, "\"#zzz\"");
     assert_color_rgb(lv_xml_to_color("zzzzzzz"), 0, 0, 0, "\"zzzzzzz\"");
+    log_capture_stop();
+
+    TEST_ASSERT_TRUE_MESSAGE(log_contains("#zzz is not a valid color"),
+                             "an unparseable value must name itself in the warning");
 }
 
-/* PINS CURRENT BEHAVIOUR - suspected bug: lv_xml_to_color discriminates purely
- * on string length (<= 5 chars -> the 3-digit expander) and does no format
- * validation at all, because lv_xml_strtol silently skips non-hex characters.
- * So a 5-hex-digit colour is mangled through the 3-digit path instead of being
- * rejected, and a CSS colour name parses as whatever hex digits happen to be
- * in it. No warning is ever logged. */
-static void test_to_color_mangles_five_digit_and_named_colors(void)
+/**
+ * The digit count is validated, so anything that is not 3, 6 or 8 hex digits is
+ * REJECTED rather than reinterpreted. Black is the documented fallback: it is
+ * what the old length-only implementation already produced for every genuinely
+ * unparseable value, so nothing that used to render changes colour.
+ *
+ * lv_xml_strtol() still skips non-hex characters (that behaviour is depended on
+ * elsewhere and is deliberately unchanged); to_color no longer relies on it.
+ */
+static void test_to_color_rejects_malformed_literals_and_warns(void)
 {
-    /* "12345" is 5 chars, so hex3(0x12345) - not the 6-digit path. */
-    assert_color_rgb(lv_xml_to_color("12345"), 0x33, 0x44, 0x55, "\"12345\"");
+    /* A 5-digit literal used to be mangled through the 3-digit expander purely
+     * because the string was <= 5 characters long. */
+    log_capture_start();
+    assert_color_rgb(lv_xml_to_color("12345"), 0, 0, 0, "\"12345\"");
+    log_capture_stop();
+    TEST_ASSERT_TRUE_MESSAGE(log_contains("12345 is not a valid color"),
+                             "a 5-digit literal must be rejected by name, not expanded as 3 digits");
 
-    /* Named colours are not supported; "red" is read as the hex digits e,d. */
-    assert_color_rgb(lv_xml_to_color("red"), 0x00, 0xEE, 0xDD, "\"red\"");
-    /* "purple": only the 'e' is a hex digit. */
-    assert_color_rgb(lv_xml_to_color("purple"), 0x00, 0x00, 0x0E, "\"purple\"");
+    /* Neighbouring digit counts, to prove 3/6/8 are the only accepted widths. */
+    log_capture_start();
+    assert_color_rgb(lv_xml_to_color("ff"), 0, 0, 0, "\"ff\"");
+    assert_color_rgb(lv_xml_to_color("ffff"), 0, 0, 0, "\"ffff\"");
+    assert_color_rgb(lv_xml_to_color("fffffff"), 0, 0, 0, "7 digits");
+    assert_color_rgb(lv_xml_to_color("fffffffff"), 0, 0, 0, "9 digits");
+    log_capture_stop();
+    TEST_ASSERT_TRUE(log_contains("ffff is not a valid color"));
 
-    /* An 8-digit #AARRGGBB-looking value silently folds the top byte away. */
-    assert_color_rgb(lv_xml_to_color("#12345678"), 0x34, 0x56, 0x78, "\"#12345678\"");
+    /* CSS colour names are not supported and must not parse as whatever hex
+     * digits happen to appear in them ("red" used to be 0x00EEDD). */
+    log_capture_start();
+    assert_color_rgb(lv_xml_to_color("red"), 0, 0, 0, "\"red\"");
+    assert_color_rgb(lv_xml_to_color("purple"), 0, 0, 0, "\"purple\"");
+    assert_color_rgb(lv_xml_to_color("white"), 0, 0, 0, "\"white\"");
+    log_capture_stop();
+    TEST_ASSERT_TRUE_MESSAGE(log_contains("red is not a valid color"),
+                             "a CSS colour name must be reported, not silently reinterpreted");
+
+    /* Trailing junk after a valid run of digits is rejected too. */
+    log_capture_start();
+    assert_color_rgb(lv_xml_to_color("#ff0000 "), 0, 0, 0, "trailing space");
+    assert_color_rgb(lv_xml_to_color("#ff0000;"), 0, 0, 0, "trailing semicolon");
+    assert_color_rgb(lv_xml_to_color("rgb(255,0,0)"), 0, 0, 0, "rgb() syntax");
+    log_capture_stop();
+    TEST_ASSERT_TRUE(log_contains("rgb(255,0,0) is not a valid color"));
+
+    /* NULL is guarded rather than dereferenced. */
+    log_capture_start();
+    assert_color_rgb(lv_xml_to_color(NULL), 0, 0, 0, "NULL");
+    log_capture_stop();
+    TEST_ASSERT_TRUE(log_contains("NULL is not a valid color"));
 }
 
 /*===========================================================================
@@ -465,30 +555,59 @@ static void test_strtol_ignores_digits_outside_the_base(void)
 {
     /* '9' is not an octal digit, so it contributes nothing. */
     TEST_ASSERT_EQUAL_INT32(0, lv_xml_strtol("09", NULL, 8));
-    /* Base 1 accepts only '0'. */
+    /* 'f' is not a decimal digit. */
+    TEST_ASSERT_EQUAL_INT32(12, lv_xml_strtol("1f2", NULL, 10));
+}
+
+/**
+ * Only 2..16 can be decoded - the digit table stops at 'f'. A base outside that
+ * range (and outside the base == 0 auto-detect case) is REJECTED: warn, consume
+ * nothing, return 0. It used to be admitted by the is_digit() range check with
+ * no matching decode branch, so the first undecodable letter hit a defensive
+ * `break` and silently truncated the number mid-way.
+ */
+static void test_strtol_rejects_bases_outside_two_to_sixteen(void)
+{
+    char * end = NULL;
+    const char * src = "1g2";
+
+    log_capture_start();
+    TEST_ASSERT_EQUAL_INT32_MESSAGE(0, lv_xml_strtol(src, &end, 17),
+                                    "base 17 must be rejected outright, not truncate after the '1'");
+    log_capture_stop();
+    TEST_ASSERT_EQUAL_PTR_MESSAGE(src, end, "a rejected base must consume nothing");
+    TEST_ASSERT_TRUE_MESSAGE(log_contains("17 is an unsupported base"),
+                             "the rejected base must be named in the warning");
+
+    log_capture_start();
+    TEST_ASSERT_EQUAL_INT32(0, lv_xml_strtol("zzz", NULL, 36));
+    /* Base 1 and base <= 0 were already 0-valued, but silently so. */
     TEST_ASSERT_EQUAL_INT32(0, lv_xml_strtol("111", NULL, 1));
     TEST_ASSERT_EQUAL_INT32(0, lv_xml_strtol("000", NULL, 1));
-    /* A base <= 0 makes every character a non-digit. */
     TEST_ASSERT_EQUAL_INT32(0, lv_xml_strtol("123", NULL, -4));
+    log_capture_stop();
+    TEST_ASSERT_TRUE(log_contains("1 is an unsupported base"));
+    TEST_ASSERT_TRUE(log_contains("-4 is an unsupported base"));
+
+    /* The two ends of the supported range, and 0, still work. */
+    log_capture_start();
+    TEST_ASSERT_EQUAL_INT32(5, lv_xml_strtol("101", NULL, 2));
+    TEST_ASSERT_EQUAL_INT32(255, lv_xml_strtol("ff", NULL, 16));
+    TEST_ASSERT_EQUAL_INT32(31, lv_xml_strtol("0x1F", NULL, 0));
+    log_capture_stop();
+    TEST_ASSERT_FALSE_MESSAGE(log_contains("unsupported base"),
+                              "bases 2, 16 and the 0 auto-detect must not warn");
 }
 
-/* PINS CURRENT BEHAVIOUR - suspected bug: bases above 16 are accepted by the
- * is_digit() range check but have no decode branch, so the first such letter
- * hits the defensive `break` and silently terminates the whole conversion.
- * Base 17+ is effectively unsupported rather than rejected. */
-static void test_strtol_stops_dead_on_a_base_above_sixteen(void)
-{
-    /* 'g' is a legal base-17 digit but undecodable, so "1g2" yields just 1. */
-    TEST_ASSERT_EQUAL_INT32(1, lv_xml_strtol("1g2", NULL, 17));
-}
-
-/* PINS CURRENT BEHAVIOUR - suspected bug: this is NOT a strtol drop-in. The
- * conversion loop has no `else break`, so invalid characters are skipped
- * rather than terminating the number, and *endptr is therefore always the end
- * of the string on the success path instead of the first invalid character.
- * lv_xml_to_color depends on this - "#ff0000" only "works" because the '#' is
- * silently dropped - so it cannot simply be fixed. */
-static void test_strtol_silently_skips_invalid_characters(void)
+/* PINS INTENTIONAL BEHAVIOUR: this is deliberately NOT a strtol drop-in. The
+ * conversion loop has no `else break`, so invalid characters are skipped rather
+ * than terminating the number, and *endptr is therefore always the end of the
+ * string on the success path instead of the first invalid character. Callers in
+ * the engine rely on the skipping, and tightening it would change the meaning of
+ * existing attribute values rather than fix a defect. (lv_xml_to_color used to
+ * be the headline dependant - "#ff0000" only worked because the '#' was dropped
+ * - but it now validates and decodes its own digits, so it no longer is.) */
+static void test_strtol_skips_invalid_characters_by_design(void)
 {
     TEST_ASSERT_EQUAL_INT32_MESSAGE(1234, lv_xml_strtol("12x34", NULL, 10),
                                     "invalid characters must be SKIPPED, not treated as terminators");
@@ -662,7 +781,7 @@ int main(void)
     /* lv_xml_to_color */
     RUN_TEST(test_to_color_accepts_every_documented_format);
     RUN_TEST(test_to_color_treats_unparseable_input_as_black);
-    RUN_TEST(test_to_color_mangles_five_digit_and_named_colors);
+    RUN_TEST(test_to_color_rejects_malformed_literals_and_warns);
 
     /* lv_xml_to_opa */
     RUN_TEST(test_to_opa_accepts_plain_numbers);
@@ -679,8 +798,8 @@ int main(void)
     RUN_TEST(test_strtol_skips_leading_space_and_tab);
     RUN_TEST(test_strtol_auto_detects_base_when_base_is_zero);
     RUN_TEST(test_strtol_ignores_digits_outside_the_base);
-    RUN_TEST(test_strtol_stops_dead_on_a_base_above_sixteen);
-    RUN_TEST(test_strtol_silently_skips_invalid_characters);
+    RUN_TEST(test_strtol_rejects_bases_outside_two_to_sixteen);
+    RUN_TEST(test_strtol_skips_invalid_characters_by_design);
     RUN_TEST(test_strtol_endptr_lands_on_the_terminator_on_success);
     RUN_TEST(test_strtol_handles_empty_string);
     RUN_TEST(test_strtol_saturates_on_overflow);

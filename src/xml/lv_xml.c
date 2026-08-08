@@ -312,7 +312,16 @@ void lv_xml_deinit(void)
 
     lv_xml_load_deinit();
 
+    /* Symmetry with lv_xml_init(): both registries are file-static and
+     * heap-backed, so leaving them behind is not just a leak - the widget list
+     * head survives lv_deinit() pointing at reclaimed memory and hangs the next
+     * lv_xml_create(). Components first: a scope teardown reaches into styles,
+     * subjects and observers, none of which depend on the widget registry. */
+    lv_xml_component_deinit();
+    lv_xml_widget_deinit();
+
     lv_free((void *)xml_path_prefix);
+    xml_path_prefix = NULL;
 }
 
 void * lv_xml_create_in_scope(lv_obj_t * parent, lv_xml_component_scope_t * parent_scope,

@@ -304,19 +304,37 @@ static void test_border_side_to_enum_warns_and_returns_none_for_empty_input(void
     TEST_ASSERT_TRUE(log_contains("internal is an unknown value for border_side"));
 }
 
-/* PINS CURRENT BEHAVIOUR - suspected bug: one bad token aborts the whole parse
- * and discards the sides already accumulated, so "left|bogus" yields 0
- * (LV_BORDER_SIDE_NONE, i.e. no border at all) rather than LV_BORDER_SIDE_LEFT.
- * The warning also prints the whole string, not the offending token. */
-static void test_border_side_to_enum_discards_valid_tokens_after_a_bad_one(void)
+/**
+ * A bad token is skipped, not fatal. Discarding the sides that already parsed
+ * turned one typo into "no border at all", which reads as a layout bug rather
+ * than a typo - and the warning named the whole attribute value, so it did not
+ * say which token to go and fix.
+ */
+static void test_border_side_to_enum_keeps_valid_tokens_and_names_the_bad_one(void)
 {
     log_capture_start();
-    TEST_ASSERT_EQUAL_INT32_MESSAGE(0, (int32_t)lv_xml_border_side_to_enum("left|bogus"),
-                                    "a later bad token currently throws away the earlier valid ones");
+    TEST_ASSERT_EQUAL_INT32_MESSAGE(LV_BORDER_SIDE_LEFT,
+                                    (int32_t)lv_xml_border_side_to_enum("left|bogus"),
+                                    "a later bad token must not throw away the earlier valid ones");
     log_capture_stop();
+    TEST_ASSERT_TRUE_MESSAGE(log_contains("bogus is an unknown value for border_side"),
+                             "the warning must name the offending TOKEN");
+    TEST_ASSERT_FALSE_MESSAGE(log_contains("left|bogus is an unknown value"),
+                              "the warning must not print the whole attribute value");
 
-    TEST_ASSERT_TRUE_MESSAGE(log_contains("left|bogus is an unknown value for border_side"),
-                             "the warning names the whole attribute value, not the bad token");
+    /* The bad token may be anywhere, and there may be several. */
+    log_capture_start();
+    TEST_ASSERT_EQUAL_INT32(LV_BORDER_SIDE_LEFT | LV_BORDER_SIDE_RIGHT,
+                            (int32_t)lv_xml_border_side_to_enum("bogus|left|nonsense|right"));
+    log_capture_stop();
+    TEST_ASSERT_TRUE(log_contains("bogus is an unknown value for border_side"));
+    TEST_ASSERT_TRUE(log_contains("nonsense is an unknown value for border_side"));
+
+    /* When every token is bad there is nothing left to keep, so it is still 0. */
+    log_capture_start();
+    TEST_ASSERT_EQUAL_INT32(0, (int32_t)lv_xml_border_side_to_enum("bogus|nonsense"));
+    log_capture_stop();
+    TEST_ASSERT_TRUE(log_contains("bogus is an unknown value for border_side"));
 }
 
 /*===========================================================================
@@ -363,21 +381,29 @@ static void test_base_dir_to_enum_accepts_auto_ltr_and_rtl(void)
     RUN_ENUM_TABLE(lv_xml_base_dir_to_enum, BASE_DIR_CASES);
 }
 
-/* PINS CURRENT BEHAVIOUR - suspected bug: the "return 0 in lack of a better
- * option" fallback happens to be LV_BASE_DIR_LTR, not LV_BASE_DIR_AUTO. A
- * typo'd base_dir attribute therefore silently FORCES left-to-right layout
- * instead of leaving direction unset, which breaks RTL locales. */
-static void test_base_dir_to_enum_falls_back_to_ltr_not_auto(void)
+/**
+ * The unknown-value fallback is AUTO, deliberately NOT the file's usual
+ * `return 0` - 0 is LV_BASE_DIR_LTR, so a typo'd base_dir used to silently
+ * FORCE left-to-right and break every RTL locale. AUTO leaves the direction
+ * inherited/detected, which is what an absent attribute does.
+ */
+static void test_base_dir_to_enum_falls_back_to_auto_not_ltr(void)
 {
     log_capture_start();
     lv_base_dir_t got = lv_xml_base_dir_to_enum("bogus_dir");
     log_capture_stop();
 
-    TEST_ASSERT_EQUAL_INT32_MESSAGE(LV_BASE_DIR_LTR, (int32_t)got,
-                                    "the unknown-value fallback is LTR, not AUTO");
+    TEST_ASSERT_EQUAL_INT32_MESSAGE(LV_BASE_DIR_AUTO, (int32_t)got,
+                                    "an unknown base_dir must fall back to AUTO, never to LTR");
     TEST_ASSERT_TRUE_MESSAGE(LV_BASE_DIR_LTR != LV_BASE_DIR_AUTO,
                              "if these ever become equal this test stops meaning anything");
     TEST_ASSERT_TRUE(log_contains("bogus_dir is an unknown value for base_dir"));
+
+    /* Not just the one string: nothing outside auto/ltr/rtl may yield LTR. */
+    log_capture_start();
+    TEST_ASSERT_EQUAL_INT32(LV_BASE_DIR_AUTO, (int32_t)lv_xml_base_dir_to_enum(""));
+    TEST_ASSERT_EQUAL_INT32(LV_BASE_DIR_AUTO, (int32_t)lv_xml_base_dir_to_enum("LTR"));
+    log_capture_stop();
 }
 
 /*===========================================================================
@@ -469,20 +495,21 @@ static void test_scrollbar_mode_to_enum_accepts_every_mode(void)
     RUN_ENUM_TABLE(lv_xml_scrollbar_mode_to_enum, SCROLLBAR_MODE_CASES);
 }
 
-/* PINS CURRENT BEHAVIOUR - suspected bug: this is the only converter in the
- * warn-group that has no LV_LOG_WARN on the fallback path. Since the fallback
- * (0) is also LV_SCROLLBAR_MODE_OFF, a typo'd scrollbar_mode is completely
- * undetectable - the scrollbar just disappears. Every sibling function warns;
- * this one almost certainly lost the line by oversight. */
-static void test_scrollbar_mode_to_enum_falls_back_to_off_without_warning(void)
+/**
+ * The fallback (0) is LV_SCROLLBAR_MODE_OFF, so without a warning a typo'd
+ * scrollbar_mode is completely undetectable - the scrollbar just disappears.
+ * This was the only converter in the warn-group missing the line.
+ */
+static void test_scrollbar_mode_to_enum_warns_and_returns_off_for_unknown(void)
 {
     log_capture_start();
     TEST_ASSERT_EQUAL_INT32(LV_SCROLLBAR_MODE_OFF,
                             (int32_t)lv_xml_scrollbar_mode_to_enum("bogus_scrollbar_mode"));
+    TEST_ASSERT_EQUAL_INT32(LV_SCROLLBAR_MODE_OFF, (int32_t)lv_xml_scrollbar_mode_to_enum(""));
     log_capture_stop();
 
-    TEST_ASSERT_FALSE_MESSAGE(log_contains("bogus_scrollbar_mode"),
-                              "lv_xml_scrollbar_mode_to_enum currently emits NO warning at all");
+    TEST_ASSERT_TRUE_MESSAGE(log_contains("bogus_scrollbar_mode is an unknown value for scrollbar_mode"),
+                             "the warning must match the phrasing every sibling converter uses");
 }
 
 /*===========================================================================
@@ -1056,32 +1083,63 @@ static void test_style_selector_guards_null_and_empty(void)
     TEST_ASSERT_EQUAL_UINT32(0, lv_xml_style_selector_text_to_enum("main|default"));
 }
 
-/* PINS CURRENT BEHAVIOUR - suspected bug: unlike border_side, an unrecognised
- * token here is silently dropped rather than failing the parse, '|' is the only
- * separator so a stray space makes an otherwise valid token unrecognisable, and
- * two PART tokens are OR'd into a value that is neither of them. All three are
- * undetectable by the caller: there is no warning and no error return. */
-static void test_style_selector_silently_swallows_bad_tokens(void)
+/**
+ * A bad token is now REPORTED, but still dropped rather than failing the parse.
+ * The lenient return is deliberate and must not change: consuming XML may
+ * already carry tokens this parser does not know, and a hard failure would be a
+ * behaviour change rather than a bug fix. So: warning only.
+ *
+ * The remaining sharp edges below are unchanged and stay pinned - '|' is the
+ * only separator (a stray space makes a valid token unrecognisable), and two
+ * PART tokens OR into a value that is neither of them.
+ */
+static void test_style_selector_warns_but_still_drops_bad_tokens(void)
 {
     log_capture_start();
 
     TEST_ASSERT_EQUAL_UINT32_MESSAGE(0, lv_xml_style_selector_text_to_enum("bogus"),
-                                     "an unknown token contributes nothing and is not reported");
+                                     "an unknown token must still contribute nothing");
     TEST_ASSERT_EQUAL_UINT32_MESSAGE(LV_PART_KNOB,
                                      lv_xml_style_selector_text_to_enum("knob|bogus"),
-                                     "a bad token is dropped instead of failing the whole selector");
+                                     "a bad token must be dropped, NOT fail the whole selector");
     TEST_ASSERT_EQUAL_UINT32_MESSAGE(0, lv_xml_style_selector_text_to_enum(" knob"),
                                      "there is no whitespace trimming - only '|' separates tokens");
 
+    log_capture_stop();
+    TEST_ASSERT_TRUE_MESSAGE(log_contains("bogus is an unknown token in style selector"),
+                             "the offending token must be named in the log");
+    TEST_ASSERT_TRUE_MESSAGE(log_contains(" knob is an unknown token in style selector"),
+                             "an untrimmed token is unrecognised and must say so");
+
     /* Two parts OR'd is nonsense, not an error: SCROLLBAR|KNOB happens to be
-     * bit-identical to KNOB. */
+     * bit-identical to KNOB. Both tokens are known, so nothing is logged. */
+    log_capture_start();
     TEST_ASSERT_EQUAL_UINT32(LV_PART_SCROLLBAR | LV_PART_KNOB,
                              lv_xml_style_selector_text_to_enum("knob|scrollbar"));
     TEST_ASSERT_EQUAL_UINT32(LV_PART_KNOB, lv_xml_style_selector_text_to_enum("knob|scrollbar"));
-
     log_capture_stop();
-    TEST_ASSERT_FALSE_MESSAGE(log_contains("bogus"),
-                              "nothing about a bad selector token reaches the log");
+    TEST_ASSERT_FALSE_MESSAGE(log_contains("unknown token"),
+                              "two known PART tokens are legal input, however useless the result");
+}
+
+/**
+ * "main" and "default" are recognised names whose value happens to be 0. They
+ * must NOT warn - the warning distinguishes "unknown token" from "known token
+ * worth zero", which the enum values alone cannot.
+ */
+static void test_style_selector_does_not_warn_for_known_zero_valued_tokens(void)
+{
+    log_capture_start();
+    TEST_ASSERT_EQUAL_UINT32(0, lv_xml_style_selector_text_to_enum("main|default"));
+    TEST_ASSERT_EQUAL_UINT32(0, lv_xml_style_selector_text_to_enum("main"));
+    TEST_ASSERT_EQUAL_UINT32(0, lv_xml_style_selector_text_to_enum("default"));
+    /* No tokens at all is not a bad token. */
+    TEST_ASSERT_EQUAL_UINT32(0, lv_xml_style_selector_text_to_enum("|||"));
+    TEST_ASSERT_EQUAL_UINT32(0, lv_xml_style_selector_text_to_enum(""));
+    log_capture_stop();
+
+    TEST_ASSERT_FALSE_MESSAGE(log_contains("unknown token"),
+                              "a recognised token that evaluates to 0 must not be reported as unknown");
 }
 
 /** The caller's string must survive - the destructive split works on a copy. */
@@ -1121,13 +1179,13 @@ int main(void)
     RUN_TEST(test_border_side_to_enum_accepts_every_side_name);
     RUN_TEST(test_border_side_to_enum_ors_multiple_tokens);
     RUN_TEST(test_border_side_to_enum_warns_and_returns_none_for_empty_input);
-    RUN_TEST(test_border_side_to_enum_discards_valid_tokens_after_a_bad_one);
+    RUN_TEST(test_border_side_to_enum_keeps_valid_tokens_and_names_the_bad_one);
 
     RUN_TEST(test_grad_dir_to_enum_accepts_none_hor_and_ver);
     RUN_TEST(test_grad_dir_to_enum_warns_and_returns_none_for_unknown);
 
     RUN_TEST(test_base_dir_to_enum_accepts_auto_ltr_and_rtl);
-    RUN_TEST(test_base_dir_to_enum_falls_back_to_ltr_not_auto);
+    RUN_TEST(test_base_dir_to_enum_falls_back_to_auto_not_ltr);
 
     RUN_TEST(test_text_align_to_enum_accepts_every_alignment);
     RUN_TEST(test_text_align_to_enum_warns_and_returns_auto_for_unknown);
@@ -1139,7 +1197,7 @@ int main(void)
     RUN_TEST(test_scroll_snap_to_enum_warns_and_returns_none_for_unknown);
 
     RUN_TEST(test_scrollbar_mode_to_enum_accepts_every_mode);
-    RUN_TEST(test_scrollbar_mode_to_enum_falls_back_to_off_without_warning);
+    RUN_TEST(test_scrollbar_mode_to_enum_warns_and_returns_off_for_unknown);
 
     RUN_TEST(test_flex_flow_to_enum_accepts_every_flow);
     RUN_TEST(test_flex_flow_to_enum_warns_and_returns_row_for_unknown);
@@ -1177,7 +1235,8 @@ int main(void)
 
     RUN_TEST(test_style_selector_ors_state_and_part);
     RUN_TEST(test_style_selector_guards_null_and_empty);
-    RUN_TEST(test_style_selector_silently_swallows_bad_tokens);
+    RUN_TEST(test_style_selector_warns_but_still_drops_bad_tokens);
+    RUN_TEST(test_style_selector_does_not_warn_for_known_zero_valued_tokens);
     RUN_TEST(test_style_selector_does_not_mutate_the_caller_string);
 
     return UNITY_END();

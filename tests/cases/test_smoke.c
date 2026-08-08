@@ -73,16 +73,18 @@ static void test_repeated_env_cycles_are_clean(void)
 {
     helix_test_env_teardown(); /* close the cycle setUp() opened */
 
-    lv_obj_t * previous_screen = NULL;
-
     for(int i = 0; i < 5; i++) {
         helix_test_env_setup();
 
         lv_obj_t * screen = helix_test_env_screen();
         TEST_ASSERT_NOT_NULL_MESSAGE(screen, "no active screen after env setup");
-        TEST_ASSERT_TRUE_MESSAGE(screen != previous_screen,
-                                 "env setup reused the previous test's screen object");
-        previous_screen = screen;
+
+        /* Deliberately NOT asserting that the screen pointer differs from the
+         * previous cycle's. Each cycle is a full lv_init()/lv_deinit(), and
+         * lv_deinit() resets LVGL's builtin allocator pool, so the next screen
+         * very reasonably lands on the same address. Address reuse is evidence
+         * of stronger isolation, not weaker - what matters is the state, which
+         * is what the rest of this loop checks. */
 
         /* A fresh cycle starts with a fresh screen - if teardown left anything
          * behind, this count would creep up across iterations. */

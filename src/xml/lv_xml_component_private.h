@@ -138,6 +138,15 @@ typedef struct {
 void lv_xml_component_init(void);
 
 /**
+ * Free every registered component scope and reset the registry to empty.
+ *
+ * Called from lv_xml_deinit(). lv_xml_component_init() only lv_ll_init()s the
+ * list, so without this every scope registered in the previous cycle is
+ * orphaned. Must run before lv_deinit().
+ */
+void lv_xml_component_deinit(void);
+
+/**
  * Initialize the linked lists of a component context
  * @param scope     pointer to a component contexts
  */

@@ -63,10 +63,13 @@ static size_t tokenize(const char * s, tok_t * out, size_t cap){
 size_t lv_xml_expr_tokenize_for_test(const char * src, lv_xml_expr_tok_kind_t * out, size_t cap){
     tok_t buf[LV_XML_EXPR_MAX_TOKENS];
     size_t n = tokenize(src, buf, LV_XML_EXPR_MAX_TOKENS);
+    /* `n` is the TRUE token count and may exceed both `cap` and the internal
+     * buffer. Return what was actually WRITTEN, so a caller looping to the
+     * return value never reads past what it owns or past what we filled in. */
+    if(n > LV_XML_EXPR_MAX_TOKENS) n = LV_XML_EXPR_MAX_TOKENS;
     size_t m = n < cap ? n : cap;
-    if (m > LV_XML_EXPR_MAX_TOKENS) m = LV_XML_EXPR_MAX_TOKENS;
     for (size_t i = 0; i < m; i++) out[i] = buf[i].kind;
-    return n;
+    return m;
 }
 
 /*=====================
@@ -115,6 +118,9 @@ static expr_node_t * parse_primary(parser_t * p){
     if(t->kind==LV_XML_EXPR_TOK_IDENT){
         advance(p);
         char name[64]; size_t ln=t->len<63?t->len:63; memcpy(name,t->start,ln); name[ln]='\0';
+        /* Truncation happens BEFORE the resolver sees the name, so two subjects
+         * sharing a 63-char prefix would silently resolve to the same one. */
+        if(t->len>ln) LV_LOG_WARN("expr: identifier longer than 63 characters, truncated to '%s'", name);
         lv_subject_t * s = p->resolver ? p->resolver(p->ctx,name) : NULL;
         if(!s){ LV_LOG_WARN("expr: unknown subject '%s'", name); p->error=true; return NULL; }
         collect_subject(p,s);
@@ -186,10 +192,16 @@ static int32_t eval_node(const expr_node_t * n){
             return n->op==LV_XML_EXPR_TOK_NOT ? (v?0:1) : -v;
         }
         case N_BINARY: {
+            /* && and || short-circuit, exactly like C. The VALUE is the same
+             * either way; what changes is that the guard idiom
+             * `d != 0 && n / d > 5` no longer evaluates the division when d is
+             * 0 - so no divide-by-zero warning, which in a bound expression was
+             * log spam on every single update. */
+            if(n->op==LV_XML_EXPR_TOK_AND) return eval_node(n->a) ? (eval_node(n->b)?1:0) : 0;
+            if(n->op==LV_XML_EXPR_TOK_OR)  return eval_node(n->a) ? 1 : (eval_node(n->b)?1:0);
+
             int32_t l = eval_node(n->a), r = eval_node(n->b);
             switch(n->op){
-                case LV_XML_EXPR_TOK_OR:  return (l||r)?1:0;
-                case LV_XML_EXPR_TOK_AND: return (l&&r)?1:0;
                 case LV_XML_EXPR_TOK_EQ:  return l==r; case LV_XML_EXPR_TOK_NE: return l!=r;
                 case LV_XML_EXPR_TOK_LT:  return l<r;  case LV_XML_EXPR_TOK_LE: return l<=r;
                 case LV_XML_EXPR_TOK_GT:  return l>r;  case LV_XML_EXPR_TOK_GE: return l>=r;

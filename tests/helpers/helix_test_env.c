@@ -34,21 +34,23 @@ static void helix_test_flush_cb(lv_display_t * disp, const lv_area_t * area, uin
     lv_display_flush_ready(disp);
 }
 
-/** Free the process-global resources. Registered with atexit(). */
-static void helix_test_env_shutdown(void)
+/** Tear LVGL and the headless display back down. */
+static void helix_test_lvgl_stop(void)
 {
     if(!s_lvgl_up) return;
 
     s_lvgl_up = false;
     s_display = NULL;
 
+    /* One call: lv_deinit() deletes the displays, groups, timers and screens
+     * itself. Deleting them by hand first is how you get a double free. */
     lv_deinit();
 
     free(s_draw_buf);
     s_draw_buf = NULL;
 }
 
-/** Bring LVGL and the headless display up. Runs at most once per process. */
+/** Bring LVGL and the headless display up. */
 static void helix_test_lvgl_start(void)
 {
     lv_init();
@@ -70,28 +72,6 @@ static void helix_test_lvgl_start(void)
     lv_display_set_default(s_display);
 
     s_lvgl_up = true;
-    atexit(helix_test_env_shutdown);
-}
-
-/**
- * Swap in a brand-new active screen and delete the outgoing one.
- *
- * Recreating rather than lv_obj_clean()ing matters: a test can set styles,
- * flags, a layout or a scroll position directly on the screen, and only a new
- * object drops all of that.
- */
-static void helix_test_swap_screen(void)
-{
-    lv_obj_t * outgoing = lv_display_get_screen_active(s_display);
-
-    lv_obj_t * fresh = lv_obj_create(NULL);
-    TEST_ASSERT_NOT_NULL_MESSAGE(fresh, "helix_test_env: could not create a screen");
-
-    lv_screen_load(fresh);
-
-    /* Safe here: we are in setUp()/tearDown(), not inside an LVGL event
-     * dispatch or timer batch, and `outgoing` is no longer the active screen. */
-    if(outgoing && outgoing != fresh) lv_obj_delete(outgoing);
 }
 
 /**********************
@@ -100,26 +80,32 @@ static void helix_test_swap_screen(void)
 
 void helix_test_env_setup(void)
 {
-    if(!s_lvgl_up) helix_test_lvgl_start();
+    /* Defensive: a test that aborts between setUp and tearDown leaves LVGL up.
+     * Unity does not run tearDown on a failed assertion, so start clean. */
+    if(s_lvgl_up) helix_test_lvgl_stop();
 
-    helix_test_swap_screen();
+    helix_test_lvgl_start();
 
     lv_xml_init();
 }
 
 void helix_test_env_teardown(void)
 {
-    /* Tolerate an unpaired teardown rather than dereferencing a NULL display:
-     * lv_display_get_screen_active(NULL) would fall back to the default
-     * display, which does not exist before the first setup. */
+    /* Tolerate an unpaired teardown rather than dereferencing a NULL display. */
     if(!s_lvgl_up) return;
 
     /* Delete this test's widgets while the XML engine is still up, so any
-     * destructor that reaches back into a component scope still finds it. */
+     * destructor that reaches back into a component scope still finds it.
+     * lv_deinit() below would delete them too, but only after lv_xml_deinit()
+     * has already freed the scopes out from under them. */
     lv_obj_t * screen = lv_display_get_screen_active(s_display);
     if(screen) lv_obj_clean(screen);
 
+    /* Order matters: the XML registries live in LVGL's heap, so they have to be
+     * released before lv_deinit() reclaims the pool underneath them. */
     lv_xml_deinit();
+
+    helix_test_lvgl_stop();
 }
 
 lv_display_t * helix_test_env_display(void)

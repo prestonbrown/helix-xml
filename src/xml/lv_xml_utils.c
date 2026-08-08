@@ -10,6 +10,7 @@
  *********************/
 #include "lv_xml_utils.h"
 #include <stdlib/lv_string.h>
+#include <misc/lv_log.h>
 #if LV_USE_XML
 
 #if LV_USE_STDLIB_STRING == LV_STDLIB_CLIB
@@ -28,6 +29,7 @@
  *  STATIC PROTOTYPES
  **********************/
 static bool is_digit(char c, int base);
+static bool hex_digit_value(char c, uint32_t * out);
 
 /**********************
  *  STATIC VARIABLES
@@ -54,12 +56,55 @@ const char * lv_xml_get_value_of(const char ** attrs, const char * name)
     return NULL;
 }
 
+/**
+ * Parse a colour literal.
+ *
+ * Accepted: an optional `#` or `0x`/`0X` prefix followed by EXACTLY 3, 6 or 8
+ * hexadecimal digits and nothing else.
+ *   - 3 digits  -> lv_color_hex3(), each nibble doubled ("f00" == "ff0000")
+ *   - 6 digits  -> RRGGBB
+ *   - 8 digits  -> AARRGGBB; the alpha byte is DISCARDED (lv_color_t has no
+ *                  alpha channel). Opacity is a separate `*_opa` attribute.
+ *
+ * Anything else - a 4- or 5-digit literal, a CSS colour name, trailing junk,
+ * an empty string - warns and returns the documented fallback, BLACK
+ * (lv_color_hex(0x000000)). Black is the fallback rather than magenta because
+ * it is what the previous length-only implementation already produced for
+ * every unparseable value, so no existing markup changes appearance.
+ *
+ * The digits are accumulated here rather than via lv_xml_strtol() for two
+ * reasons: strtol silently SKIPS non-hex characters (which is exactly why this
+ * function never validated anything), and it saturates at INT32_MAX, which
+ * would mangle any 8-digit value with the high bit set.
+ */
 lv_color_t lv_xml_to_color(const char * str)
 {
-    /*fff, #fff, 0xfff*/
-    if(lv_strlen(str) <= 5) return lv_color_hex3(lv_xml_strtol(str, NULL, 16));
-    /*ffffff, #ffffff, 0xffffff*/
-    else return lv_color_hex(lv_xml_strtol(str, NULL, 16));
+    if(str == NULL) {
+        LV_LOG_WARN("NULL is not a valid color");
+        return lv_color_hex(0x000000);
+    }
+
+    const char * p = str;
+    if(p[0] == '#') p++;
+    else if(p[0] == '0' && (p[1] == 'x' || p[1] == 'X')) p += 2;
+
+    uint32_t value = 0;
+    size_t digits = 0;
+    uint32_t nibble;
+    while(hex_digit_value(p[digits], &nibble)) {
+        value = (value << 4) | nibble;
+        digits++;
+        if(digits > 8) break; /*Already too long; stop before value wraps.*/
+    }
+
+    if(p[digits] != '\0' || (digits != 3 && digits != 6 && digits != 8)) {
+        LV_LOG_WARN("%s is not a valid color - expected 3, 6 or 8 hex digits, "
+                    "optionally prefixed with '#' or '0x'", str);
+        return lv_color_hex(0x000000);
+    }
+
+    if(digits == 3) return lv_color_hex3(value);
+    return lv_color_hex(value); /*6 digits as-is; 8 drops the alpha byte.*/
 }
 
 lv_opa_t lv_xml_to_opa(const char * str)
@@ -195,6 +240,17 @@ int32_t lv_xml_strtol(const char * str, char ** endptr, int32_t base)
     int32_t result = 0;
     int32_t sign = 1;
 
+    /* Only 2..16 (and 0 = auto-detect) can be decoded: the digit table below
+     * stops at 'f'. is_digit() used to ADMIT 17+, so the first 'g' fell through
+     * to the defensive `break` and silently truncated the number instead of
+     * reporting anything. Reject the base up front, consume nothing, return 0. */
+    if(base != 0 && (base < 2 || base > 16)) {
+        LV_LOG_WARN("%d is an unsupported base for lv_xml_strtol (expected 2..16, or 0 to auto-detect)",
+                    (int)base);
+        if(endptr) *endptr = (char *)str;
+        return 0;
+    }
+
     /* Skip leading whitespace */
     while(*s == ' ' || *s == '\t') s++;
 
@@ -294,6 +350,17 @@ char * lv_xml_split_str(char ** src, char delimiter)
 /**********************
  *   STATIC FUNCTIONS
  **********************/
+
+/** Decode one hexadecimal digit. @return false if @p c is not one. */
+static bool hex_digit_value(char c, uint32_t * out)
+{
+    if(c >= '0' && c <= '9') *out = (uint32_t)(c - '0');
+    else if(c >= 'a' && c <= 'f') *out = (uint32_t)(c - 'a' + 10);
+    else if(c >= 'A' && c <= 'F') *out = (uint32_t)(c - 'A' + 10);
+    else return false;
+
+    return true;
+}
 
 static bool is_digit(char c, int base)
 {

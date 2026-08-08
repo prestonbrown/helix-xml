@@ -128,6 +128,11 @@ static lv_border_side_t border_side_token_to_enum(const char * txt, size_t len)
  * fall through to the unknown-value branch and return 0 — which is
  * LV_BORDER_SIDE_NONE, i.e. the border silently vanished instead of the parse
  * failing loudly. Accept `|`, `,` and whitespace as separators.
+ *
+ * A bad token is skipped, not fatal: "left|bogus" is LV_BORDER_SIDE_LEFT, not
+ * LV_BORDER_SIDE_NONE. Throwing away the sides that did parse turns one typo
+ * into "no border at all", which reads as a layout bug rather than a typo. The
+ * warning names the offending TOKEN, since that is the part to go and fix.
  */
 lv_border_side_t lv_xml_border_side_to_enum(const char * txt)
 {
@@ -142,16 +147,22 @@ lv_border_side_t lv_xml_border_side_to_enum(const char * txt)
         const char * start = p;
         while(*p && *p != '|' && *p != ',' && *p != ' ' && *p != '\t') p++;
         size_t len = (size_t)(p - start);
+        any = true;
 
         lv_border_side_t one = border_side_token_to_enum(start, len);
         /*"none" parses to 0, so a zero result is only an error when the token
           was not literally "none".*/
         if(one == LV_BORDER_SIDE_NONE && !(len == 4 && lv_memcmp("none", start, 4) == 0)) {
-            LV_LOG_WARN("%s is an unknown value for border_side", txt);
-            return 0; /*Return 0 in lack of a better option. */
+            /*Copy rather than "%.*s": the log backend may be LVGL's own
+              lv_vsnprintf, whose precision support is not guaranteed.*/
+            char tok[32];
+            size_t n = len < sizeof(tok) - 1 ? len : sizeof(tok) - 1;
+            lv_memcpy(tok, start, n);
+            tok[n] = '\0';
+            LV_LOG_WARN("%s is an unknown value for border_side", tok);
+            continue; /*Skip only this token; keep the sides already parsed.*/
         }
         out |= one;
-        any = true;
     }
 
     if(!any) {
@@ -178,7 +189,10 @@ lv_base_dir_t lv_xml_base_dir_to_enum(const char * txt)
     if(lv_streq("rtl", txt)) return LV_BASE_DIR_RTL;
 
     LV_LOG_WARN("%s is an unknown value for base_dir", txt);
-    return 0; /*Return 0 in lack of a better option. */
+    /*NOT the usual `return 0`: 0 is LV_BASE_DIR_LTR, so a typo would silently
+     *FORCE left-to-right and break every RTL locale. AUTO leaves the direction
+     *to be inherited/detected, which is what an absent attribute does.*/
+    return LV_BASE_DIR_AUTO;
 }
 
 lv_text_align_t lv_xml_text_align_to_enum(const char * txt)
@@ -219,6 +233,8 @@ lv_scrollbar_mode_t lv_xml_scrollbar_mode_to_enum(const char * txt)
     else if(lv_streq("on", txt)) return LV_SCROLLBAR_MODE_ON;
     else if(lv_streq("active", txt)) return LV_SCROLLBAR_MODE_ACTIVE;
     else if(lv_streq("auto", txt)) return LV_SCROLLBAR_MODE_AUTO;
+
+    LV_LOG_WARN("%s is an unknown value for scrollbar_mode", txt);
     return 0; /*Return 0 in lack of a better option. */
 }
 
@@ -522,34 +538,63 @@ lv_style_prop_t lv_xml_style_prop_to_enum(const char * txt)
     return LV_STYLE_PROP_INV;
 }
 
+/**
+ * Look a state name up.
+ *
+ * Split out from lv_xml_style_state_to_enum() because "unrecognised" and
+ * "recognised, value 0" are different answers and the enum value cannot tell
+ * them apart - LV_STATE_DEFAULT and LV_PART_MAIN are both 0. The selector
+ * parser needs the distinction to know what to warn about.
+ *
+ * @return true if @p txt is a known state name; @p out then holds its value.
+ */
+static bool style_state_lookup(const char * txt, lv_state_t * out)
+{
+    if(lv_streq("default", txt)) *out = LV_STATE_DEFAULT;
+    else if(lv_streq("pressed", txt)) *out = LV_STATE_PRESSED;
+    else if(lv_streq("checked", txt)) *out = LV_STATE_CHECKED;
+    else if(lv_streq("scrolled", txt)) *out = LV_STATE_SCROLLED;
+    else if(lv_streq("focused", txt)) *out = LV_STATE_FOCUSED;
+    else if(lv_streq("focus_key", txt)) *out = LV_STATE_FOCUS_KEY;
+    else if(lv_streq("edited", txt)) *out = LV_STATE_EDITED;
+    else if(lv_streq("hovered", txt)) *out = LV_STATE_HOVERED;
+    else if(lv_streq("disabled", txt)) *out = LV_STATE_DISABLED;
+    else if(lv_streq("user_1", txt)) *out = LV_STATE_USER_1;
+    else if(lv_streq("user_2", txt)) *out = LV_STATE_USER_2;
+    else if(lv_streq("user_3", txt)) *out = LV_STATE_USER_3;
+    else if(lv_streq("user_4", txt)) *out = LV_STATE_USER_4;
+    else return false;
+
+    return true;
+}
+
+/** Part-name counterpart of style_state_lookup(). */
+static bool style_part_lookup(const char * txt, lv_part_t * out)
+{
+    if(lv_streq("main", txt)) *out = LV_PART_MAIN;
+    else if(lv_streq("scrollbar", txt)) *out = LV_PART_SCROLLBAR;
+    else if(lv_streq("indicator", txt)) *out = LV_PART_INDICATOR;
+    else if(lv_streq("knob", txt)) *out = LV_PART_KNOB;
+    else if(lv_streq("selected", txt)) *out = LV_PART_SELECTED;
+    else if(lv_streq("items", txt)) *out = LV_PART_ITEMS;
+    else if(lv_streq("cursor", txt)) *out = LV_PART_CURSOR;
+    else return false;
+
+    return true;
+}
+
 lv_state_t lv_xml_style_state_to_enum(const char * txt)
 {
-    if(lv_streq("default", txt)) return LV_STATE_DEFAULT;
-    else if(lv_streq("pressed", txt)) return LV_STATE_PRESSED;
-    else if(lv_streq("checked", txt)) return LV_STATE_CHECKED;
-    else if(lv_streq("scrolled", txt)) return LV_STATE_SCROLLED;
-    else if(lv_streq("focused", txt)) return LV_STATE_FOCUSED;
-    else if(lv_streq("focus_key", txt)) return LV_STATE_FOCUS_KEY;
-    else if(lv_streq("edited", txt)) return LV_STATE_EDITED;
-    else if(lv_streq("hovered", txt)) return LV_STATE_HOVERED;
-    else if(lv_streq("disabled", txt)) return LV_STATE_DISABLED;
-    else if(lv_streq("user_1", txt)) return LV_STATE_USER_1;
-    else if(lv_streq("user_2", txt)) return LV_STATE_USER_2;
-    else if(lv_streq("user_3", txt)) return LV_STATE_USER_3;
-    else if(lv_streq("user_4", txt)) return LV_STATE_USER_4;
+    lv_state_t v;
+    if(style_state_lookup(txt, &v)) return v;
 
     return 0; /*Return 0 in lack of a better option. */
 }
 
 lv_part_t lv_xml_style_part_to_enum(const char * txt)
 {
-    if(lv_streq("main", txt)) return LV_PART_MAIN;
-    else if(lv_streq("scrollbar", txt)) return LV_PART_SCROLLBAR;
-    else if(lv_streq("indicator", txt)) return LV_PART_INDICATOR;
-    else if(lv_streq("knob", txt)) return LV_PART_KNOB;
-    else if(lv_streq("selected", txt)) return LV_PART_SELECTED;
-    else if(lv_streq("items", txt)) return LV_PART_ITEMS;
-    else if(lv_streq("cursor", txt)) return LV_PART_CURSOR;
+    lv_part_t v;
+    if(style_part_lookup(txt, &v)) return v;
 
     return 0; /*Return 0 in lack of a better option. */
 }
@@ -566,8 +611,23 @@ lv_style_selector_t lv_xml_style_selector_text_to_enum(const char * str)
 
     while(next) {
         /* Handle different states and parts */
-        selector |= lv_xml_style_state_to_enum(next);
-        selector |= lv_xml_style_part_to_enum(next);
+        lv_state_t state;
+        lv_part_t part;
+        bool known = false;
+
+        if(style_state_lookup(next, &state)) {
+            selector |= state;
+            known = true;
+        }
+        if(style_part_lookup(next, &part)) {
+            selector |= part;
+            known = true;
+        }
+
+        /* Warn only - the return semantics stay lenient on purpose. Consuming
+         * XML may already carry tokens this parser drops, and turning that into
+         * a hard failure would change behaviour, not just report it. */
+        if(!known) LV_LOG_WARN("%s is an unknown token in style selector '%s'", next, str);
 
         /* Move to the next token */
         next = lv_xml_split_str(&bufp, '|');

@@ -34,7 +34,14 @@ typedef enum {
     LV_XML_EXPR_TOK_ERROR,
 } lv_xml_expr_tok_kind_t;
 
-/* Test-only: tokenize `src` into `out` (up to `cap`); returns token count.
+/* Test-only: tokenize `src` into `out`.
+ *
+ * Returns the number of entries actually WRITTEN to `out`, which is
+ * min(true token count, `cap`, 128) - 128 being the internal token buffer.
+ * It is NOT the true token count: a source with more tokens than that is
+ * truncated, and the return value shrinks with it. Looping `for(i = 0; i < ret;
+ * i++)` over `out` is therefore always safe.
+ *
  * Word operators (and/or/not/eq/ne/lt/le/gt/ge) are folded to their symbolic
  * kind here so the parser never sees the distinction. */
 size_t lv_xml_expr_tokenize_for_test(const char * src,

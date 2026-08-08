@@ -281,16 +281,18 @@ static void test_tokenize_writes_nothing_when_cap_is_zero(void)
 
     size_t n = lv_xml_expr_tokenize_for_test("1 + 2", &sentinel, 0);
 
-    TEST_ASSERT_EQUAL_size_t_MESSAGE(4, n, "the count must be reported even with cap == 0");
+    TEST_ASSERT_EQUAL_size_t_MESSAGE(0, n, "nothing was written, so the return must be 0");
     TEST_ASSERT_EQUAL_INT_MESSAGE((int)LV_XML_EXPR_TOK_ERROR, (int)sentinel,
                                   "cap == 0 must not write to the output buffer");
 }
 
-/* PINS CURRENT BEHAVIOUR - suspected bug: the returned count is the TRUE token
- * count, but the function only ever writes min(n, cap, 128) entries, because
- * its internal buffer is 128 tokens. A caller that loops `for(i = 0; i < n; i++)`
- * over `out` on a long source reads uninitialised memory. Callers must clamp. */
-static void test_tokenize_count_can_exceed_the_entries_it_wrote(void)
+/**
+ * The return value is the number of entries actually WRITTEN, i.e.
+ * min(true token count, cap, 128) - 128 being the internal token buffer. It
+ * used to be the TRUE token count, so `for(i = 0; i < n; i++)` over `out` read
+ * uninitialised memory on any source longer than the buffer or the cap.
+ */
+static void test_tokenize_returns_the_number_of_entries_it_wrote(void)
 {
     /* 200 INT tokens plus EOF = 201, well past the internal 128-token buffer. */
     char src[1024];
@@ -306,11 +308,22 @@ static void test_tokenize_count_can_exceed_the_entries_it_wrote(void)
 
     size_t n = lv_xml_expr_tokenize_for_test(src, out, sizeof(out) / sizeof(out[0]));
 
-    TEST_ASSERT_EQUAL_size_t_MESSAGE(201, n, "the true token count must still be returned");
+    TEST_ASSERT_EQUAL_size_t_MESSAGE(128, n,
+                                     "the internal buffer holds 128 tokens, so 128 is all that "
+                                     "can be written however large cap is");
     TEST_ASSERT_EQUAL_INT_MESSAGE((int)LV_XML_EXPR_TOK_INT, (int)out[127],
-                                  "the first 128 entries must be written");
+                                  "every entry up to the returned count must be written");
     TEST_ASSERT_EQUAL_INT_MESSAGE((int)LV_XML_EXPR_TOK_ERROR, (int)out[128],
-                                  "entries past 128 are NOT written despite the larger count");
+                                  "nothing past the returned count may be touched");
+
+    /* `cap` is the other clamp, and it wins when it is the smaller one. */
+    for(size_t i = 0; i < sizeof(out) / sizeof(out[0]); i++) out[i] = LV_XML_EXPR_TOK_ERROR;
+    n = lv_xml_expr_tokenize_for_test("1 + 2", out, 2);
+    TEST_ASSERT_EQUAL_size_t_MESSAGE(2, n, "cap must clamp the return value too");
+    TEST_ASSERT_EQUAL_INT((int)LV_XML_EXPR_TOK_INT, (int)out[0]);
+    TEST_ASSERT_EQUAL_INT((int)LV_XML_EXPR_TOK_PLUS, (int)out[1]);
+    TEST_ASSERT_EQUAL_INT_MESSAGE((int)LV_XML_EXPR_TOK_ERROR, (int)out[2],
+                                  "writing must stop at cap");
 }
 
 /*===========================================================================
@@ -451,11 +464,13 @@ static void test_compile_rejects_syntax_errors(void)
     TEST_ASSERT_TRUE(log_contains("expr: parse error"));
 }
 
-/* PINS CURRENT BEHAVIOUR - suspected bug: identifiers are copied into a
- * char[64] and truncated to 63 characters BEFORE the resolver is called, with
- * no warning. Two subject names sharing a 63-character prefix are therefore
- * indistinguishable to the resolver. */
-static void test_compile_truncates_identifiers_at_63_characters(void)
+/**
+ * Identifiers are copied into a char[64], so anything longer is truncated to 63
+ * characters BEFORE the resolver is called - two subject names sharing a
+ * 63-character prefix resolve to the same subject. The truncation itself is a
+ * buffer limit and stays; what must not happen is it being SILENT.
+ */
+static void test_compile_warns_when_it_truncates_a_long_identifier(void)
 {
     char long_name[71];
     memset(long_name, 'a', 70);
@@ -469,6 +484,21 @@ static void test_compile_truncates_identifiers_at_63_characters(void)
                                      "the resolver is handed only the first 63 characters");
     TEST_ASSERT_EQUAL_MEMORY_MESSAGE(long_name, g_last_resolved, 63,
                                      "the truncated prefix must be the head of the identifier");
+    TEST_ASSERT_TRUE_MESSAGE(log_contains("truncated to 'aaaaaaaa"),
+                             "truncation must warn and show what the resolver actually got");
+
+    /* Exactly 63 characters fits, so nothing is truncated and nothing warns. */
+    char exact_name[64];
+    memset(exact_name, 'b', 63);
+    exact_name[63] = '\0';
+
+    log_capture_start();
+    TEST_ASSERT_NULL(lv_xml_expr_compile(exact_name, null_resolver, NULL));
+    log_capture_stop();
+
+    TEST_ASSERT_EQUAL_size_t(63, strlen(g_last_resolved));
+    TEST_ASSERT_FALSE_MESSAGE(log_contains("truncated"),
+                              "an identifier that fits exactly must not warn");
 }
 
 /*===========================================================================
@@ -562,9 +592,10 @@ static void test_binary_operators_are_left_associative(void)
     TEST_ASSERT_EQUAL_INT32(4, eval_literal("16 / 2 / 2"));
 }
 
-/* PINS CURRENT BEHAVIOUR - suspected bug: all six comparison operators share
- * one left-associative level, so a chained comparison silently means something
- * else rather than being rejected. "1 < 2 < 3" is (1<2) < 3, i.e. 1 < 3. */
+/* PINS INTENTIONAL BEHAVIOUR: all six comparison operators share one
+ * left-associative level, so "1 < 2 < 3" is (1<2) < 3. That is exactly what C
+ * does, and this language is deliberately C-shaped - rejecting the chain would
+ * be a grammar change, not a bug fix. It is an authoring trap, not a defect. */
 static void test_chained_comparisons_fold_left_instead_of_being_rejected(void)
 {
     TEST_ASSERT_EQUAL_INT32_MESSAGE(1, eval_literal("1 < 2 < 3"),
@@ -574,9 +605,11 @@ static void test_chained_comparisons_fold_left_instead_of_being_rejected(void)
                                     "(3>2) > 1 == 1 > 1 == 0, NOT the mathematical reading");
 }
 
-/* PINS CURRENT BEHAVIOUR - the unary operators bind TIGHTER than comparison,
+/* PINS INTENTIONAL BEHAVIOUR: the unary operators bind TIGHTER than comparison,
  * which is the opposite of Python's `not`. "not 5 == 1" is "(not 5) == 1", not
- * "not (5 == 1)". Correct per the grammar, but a classic authoring trap. */
+ * "not (5 == 1)". This is correct per the grammar (parse_unary sits below
+ * parse_cmp) and matches C's `!`; only the word spelling makes it read
+ * otherwise. A classic authoring trap, not a defect. */
 static void test_unary_not_binds_tighter_than_comparison(void)
 {
     TEST_ASSERT_EQUAL_INT32_MESSAGE(0, eval_literal("not 5 == 1"),
@@ -646,28 +679,65 @@ static void test_divide_and_modulo_by_zero_yield_zero_and_warn(void)
     TEST_ASSERT_EQUAL_INT32(5, eval_literal("5 + 10 / 0"));
 }
 
-/* PINS CURRENT BEHAVIOUR - suspected bug: && and || do NOT short-circuit.
- * eval_node computes both operands before looking at the operator, so the
- * guard idiom `d != 0 && n / d > 5` does not actually protect the division.
- * The value is unaffected; the only observable symptom is the warning (and,
- * in a bound expression, log spam on every update). */
-static void test_boolean_operators_do_not_short_circuit(void)
+/**
+ * && and || short-circuit, exactly like C. eval_node used to compute both
+ * operands before looking at the operator, so the guard idiom
+ * `d != 0 && n / d > 5` did not actually protect the division: it warned on
+ * every evaluation, which in a bound expression is log spam on every update.
+ *
+ * The VALUE never changed - only the spurious evaluation and its warning.
+ */
+static void test_boolean_operators_short_circuit(void)
 {
     log_capture_start();
     int32_t v = eval_literal("0 && (10 / 0)");
     log_capture_stop();
 
     TEST_ASSERT_EQUAL_INT32(0, v);
-    TEST_ASSERT_TRUE_MESSAGE(log_contains("expr: divide by zero"),
-                             "the right operand of && is evaluated even when the left is false");
+    TEST_ASSERT_FALSE_MESSAGE(log_contains("expr: divide by zero"),
+                              "a false left operand must skip the right side of &&");
 
     log_capture_start();
     v = eval_literal("1 || (10 / 0)");
     log_capture_stop();
 
     TEST_ASSERT_EQUAL_INT32(1, v);
+    TEST_ASSERT_FALSE_MESSAGE(log_contains("expr: divide by zero"),
+                              "a true left operand must skip the right side of ||");
+
+    /* The mirror cases: when the left operand does NOT decide the result, the
+     * right one still has to be evaluated. */
+    log_capture_start();
+    TEST_ASSERT_EQUAL_INT32(0, eval_literal("1 && (10 / 0)"));
+    log_capture_stop();
     TEST_ASSERT_TRUE_MESSAGE(log_contains("expr: divide by zero"),
-                             "the right operand of || is evaluated even when the left is true");
+                             "a true left operand must NOT skip the right side of &&");
+
+    log_capture_start();
+    TEST_ASSERT_EQUAL_INT32(0, eval_literal("0 || (10 / 0)"));
+    log_capture_stop();
+    TEST_ASSERT_TRUE_MESSAGE(log_contains("expr: divide by zero"),
+                             "a false left operand must NOT skip the right side of ||");
+
+    /* Values are unchanged across the whole truth table. */
+    TEST_ASSERT_EQUAL_INT32(1, eval_literal("1 && 1"));
+    TEST_ASSERT_EQUAL_INT32(0, eval_literal("1 && 0"));
+    TEST_ASSERT_EQUAL_INT32(0, eval_literal("0 && 1"));
+    TEST_ASSERT_EQUAL_INT32(0, eval_literal("0 && 0"));
+    TEST_ASSERT_EQUAL_INT32(1, eval_literal("1 || 1"));
+    TEST_ASSERT_EQUAL_INT32(1, eval_literal("1 || 0"));
+    TEST_ASSERT_EQUAL_INT32(1, eval_literal("0 || 1"));
+    TEST_ASSERT_EQUAL_INT32(0, eval_literal("0 || 0"));
+    /* Non-zero operands still canonicalise to exactly 1. */
+    TEST_ASSERT_EQUAL_INT32(1, eval_literal("5 && 7"));
+    TEST_ASSERT_EQUAL_INT32(1, eval_literal("5 || 7"));
+
+    /* The real-world idiom this fix exists for: the guard now guards. */
+    log_capture_start();
+    TEST_ASSERT_EQUAL_INT32(0, eval_literal("0 != 0 && 10 / 0 > 5"));
+    log_capture_stop();
+    TEST_ASSERT_FALSE_MESSAGE(log_contains("expr: divide by zero"),
+                              "`d != 0 && n / d > 5` must not evaluate the division when d is 0");
 }
 
 /*===========================================================================
@@ -734,10 +804,12 @@ static void test_subject_accessors_are_null_safe_and_bounds_checked(void)
     lv_xml_expr_free(lit);
 }
 
-/* PINS CURRENT BEHAVIOUR - the 33rd distinct subject is dropped from the
+/* PINS INTENTIONAL BEHAVIOUR: the 33rd distinct subject is dropped from the
  * dependency list with a warning, but its AST node is still built. So the
- * expression evaluates correctly while subject_count under-reports, and a
- * bind will silently fail to react to changes in the dropped subjects. */
+ * expression evaluates correctly while subject_count under-reports, and a bind
+ * will not react to changes in the dropped subjects. The cap is a fixed-size
+ * collector that already warns; raising it (or making it dynamic) is a design
+ * change with an allocation story attached, not a bug fix. */
 static void test_more_than_32_distinct_subjects_are_dropped_from_the_dependency_list(void)
 {
     subjects_reset();
@@ -938,7 +1010,7 @@ int main(void)
     RUN_TEST(test_tokenize_word_operators_are_case_sensitive);
     RUN_TEST(test_tokenize_reports_unknown_and_half_written_operators_as_errors);
     RUN_TEST(test_tokenize_writes_nothing_when_cap_is_zero);
-    RUN_TEST(test_tokenize_count_can_exceed_the_entries_it_wrote);
+    RUN_TEST(test_tokenize_returns_the_number_of_entries_it_wrote);
 
     /* compile */
     RUN_TEST(test_compile_accepts_subject_free_expressions_without_a_resolver);
@@ -948,7 +1020,7 @@ int main(void)
     RUN_TEST(test_compile_rejects_any_bad_token);
     RUN_TEST(test_compile_rejects_unresolved_identifiers);
     RUN_TEST(test_compile_rejects_syntax_errors);
-    RUN_TEST(test_compile_truncates_identifiers_at_63_characters);
+    RUN_TEST(test_compile_warns_when_it_truncates_a_long_identifier);
 
     /* eval */
     RUN_TEST(test_eval_computes_arithmetic);
@@ -969,7 +1041,7 @@ int main(void)
 
     /* division by zero + short circuit */
     RUN_TEST(test_divide_and_modulo_by_zero_yield_zero_and_warn);
-    RUN_TEST(test_boolean_operators_do_not_short_circuit);
+    RUN_TEST(test_boolean_operators_short_circuit);
 
     /* subject operands */
     RUN_TEST(test_eval_reads_subject_values_at_evaluation_time);

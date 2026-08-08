@@ -62,6 +62,7 @@ static void process_subject_expr_element(lv_xml_parser_state_t * state, const ch
 static char * extract_view_content(const char * xml_definition);
 static style_prop_anim_type_t style_prop_anim_get_type(lv_style_prop_t prop);
 static void anim_exec_cb(lv_anim_t * a, int32_t v);
+static void component_scope_free(lv_xml_component_scope_t * scope);
 
 /**********************
  *  STATIC VARIABLES
@@ -339,7 +340,35 @@ lv_result_t lv_xml_component_unregister(const char * name)
     if(scope == NULL) return LV_RESULT_INVALID;
 
     lv_ll_remove(&component_scope_ll, scope);
+    component_scope_free(scope);
 
+    return LV_RESULT_OK;
+}
+
+void lv_xml_component_deinit(void)
+{
+    /* lv_xml_component_init() used to be a bare lv_ll_init(), which zeroes the
+     * head and orphans every scope that was registered before it - the same
+     * init/deinit asymmetry as the widget-processor list, minus the dangling
+     * head (lv_ll_init writes NULL, so nothing is walked into freed memory).
+     * Draining the list here makes lv_xml_deinit() actually give the memory
+     * back and lets an lv_xml_deinit()/lv_xml_init() cycle start clean. */
+    lv_xml_component_scope_t * scope;
+    while((scope = lv_ll_get_head(&component_scope_ll)) != NULL) {
+        lv_ll_remove(&component_scope_ll, scope);
+        component_scope_free(scope);
+    }
+    lv_ll_init(&component_scope_ll, sizeof(lv_xml_component_scope_t));
+}
+
+/**********************
+ *   STATIC FUNCTIONS
+ **********************/
+
+/** Release everything a scope owns, and the scope itself. The caller must have
+ *  already unlinked it from `component_scope_ll`. */
+static void component_scope_free(lv_xml_component_scope_t * scope)
+{
     lv_free((char *)scope->name);
     lv_free((char *)scope->view_def);
     lv_free((char *)scope->extends);
@@ -447,13 +476,7 @@ lv_result_t lv_xml_component_unregister(const char * name)
     lv_ll_clear(&scope->timeline_ll);
 
     lv_free(scope);
-
-    return LV_RESULT_OK;
 }
-
-/**********************
- *   STATIC FUNCTIONS
- **********************/
 
 static void process_const_element(lv_xml_parser_state_t * state, const char ** attrs)
 {

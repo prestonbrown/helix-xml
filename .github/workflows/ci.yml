@@ -64,14 +64,22 @@ jobs:
           key: deps-${{ runner.os }}-san-lvgl-${{ env.LVGL_TAG }}
           restore-keys: deps-${{ runner.os }}-san-lvgl-
 
+      # -fno-sanitize=function: UBSan's indirect-call type check fires on LVGL's
+      # own function-pointer idioms, not on anything in this library. Two sites
+      # abort every test binary before it runs a single case:
+      #   lv_ll.c:175            lv_display_delete       via void (*)(void *)
+      #   lv_draw_sw_mask.c:102  lv_draw_mask_radius     via a wider signature
+      # Both are upstream LVGL and not ours to fix, so the sub-check is off.
+      # Everything else in ASan and UBSan stays on - that is what catches the
+      # bugs this suite exists to catch.
       - name: Configure
         env:
           CC: clang
         run: |
           cmake -S tests -B build-san \
             -DCMAKE_BUILD_TYPE=Debug \
-            -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer -g" \
-            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
+            -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-sanitize=function -fno-omit-frame-pointer -g" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined -fno-sanitize=function"
 
       - name: Build
         run: cmake --build build-san --parallel

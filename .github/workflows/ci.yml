@@ -72,9 +72,13 @@ jobs:
       # Both are upstream LVGL and not ours to fix, so the sub-check is off.
       # Everything else in ASan and UBSan stays on - that is what catches the
       # bugs this suite exists to catch.
+      # CXX matters even though this project is LANGUAGES C: LVGL's CMake enables
+      # C++, so leaving CXX unset probes g++, which does not know
+      # -fno-sanitize=function (it is a clang-only check) and fails at configure.
       - name: Configure
         env:
           CC: clang
+          CXX: clang++
         run: |
           cmake -S tests -B build-san \
             -DCMAKE_BUILD_TYPE=Debug \

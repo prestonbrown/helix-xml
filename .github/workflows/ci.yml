@@ -75,13 +75,27 @@ jobs:
       # CXX matters even though this project is LANGUAGES C: LVGL's CMake enables
       # C++, so leaving CXX unset probes g++, which does not know
       # -fno-sanitize=function (it is a clang-only check) and fails at configure.
+      # LV_STDLIB_CLIB, not the default builtin allocator. LVGL's builtin is a
+      # single static pool, so every LVGL-side allocation looks to ASan like one
+      # long-lived array: a use-after-free on freed style storage reads as an
+      # ordinary in-bounds access and LeakSanitizer has nothing to attribute.
+      # Under CLIB the same bug reports as a heap-use-after-free naming the
+      # allocating and freeing call sites. The suite's heap-accounting
+      # assertions are gated on the builtin allocator and self-skip here; the
+      # behavioural assertions run under both.
       - name: Configure
         env:
           CC: clang
           CXX: clang++
         run: |
+          set -eux
+          mkdir -p conf-variants/san
+          sed -E 's/^#define LV_USE_STDLIB_MALLOC +LV_STDLIB_BUILTIN$/#define LV_USE_STDLIB_MALLOC    LV_STDLIB_CLIB/' \
+            tests/lv_conf.h > conf-variants/san/lv_conf.h
+          grep -qE '^#define LV_USE_STDLIB_MALLOC +LV_STDLIB_CLIB$' conf-variants/san/lv_conf.h
           cmake -S tests -B build-san \
             -DCMAKE_BUILD_TYPE=Debug \
+            -DLV_BUILD_CONF_DIR="$PWD/conf-variants/san" \
             -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-sanitize=function -fno-omit-frame-pointer -g" \
             -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined -fno-sanitize=function"
 

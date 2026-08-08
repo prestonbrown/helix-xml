@@ -62,6 +62,37 @@ endif()
 get_filename_component(LV_BUILD_CONF_DIR "${LV_BUILD_CONF_DIR}" ABSOLUTE)
 message(STATUS "helix-xml tests: lv_conf.h from ${LV_BUILD_CONF_DIR}")
 
+if(NOT EXISTS "${LV_BUILD_CONF_DIR}/lv_conf.h")
+    message(FATAL_ERROR "No lv_conf.h in LV_BUILD_CONF_DIR=${LV_BUILD_CONF_DIR}")
+endif()
+
+# Pin the config by ABSOLUTE PATH for every translation unit in this build -
+# LVGL's, helix-xml's and the tests'.
+#
+# LV_BUILD_CONF_DIR on its own is not enough. LVGL answers it with
+# LV_CONF_INCLUDE_SIMPLE, i.e. a bare `#include "lv_conf.h"` resolved off the
+# include path - and it exports the conf dir as a SYSTEM include, so it lands in
+# `-isystem`, which the compiler searches only AFTER every `-I`. The test
+# targets need tests/ on `-I` for "helpers/...", and tests/ also holds the
+# DEFAULT lv_conf.h. So the moment -DLV_BUILD_CONF_DIR points anywhere else -
+# which is what every CI variant does - `-I tests` outranks `-isystem <variant>`
+# and the test half of the build silently reads tests/lv_conf.h while LVGL and
+# helix_xml read the variant. Include ORDER cannot fix this: BEFORE only sorts
+# within the `-I` bucket, and the conf dir is not in it.
+#
+# Nothing catches the split. Both halves compile and link, and the binary runs;
+# they just disagree about lv_global_t, whose layout the config decides.
+# LV_USE_STDLIB_MALLOC == LV_STDLIB_BUILTIN puts lv_tlsf_state_t in it
+# (lv_global.h), 48 bytes ahead of translation_packs_ll and of every other field
+# after it - so a test that reads one gets a wrong offset and a plausible answer
+# back: an empty pack list the library had just pushed a pack onto.
+#
+# LV_CONF_PATH is an absolute #include and outranks LV_CONF_INCLUDE_SIMPLE in
+# lv_conf_internal.h, so it is immune to all of that. Set at directory scope
+# BEFORE the LVGL subdirectory is added, so LVGL inherits it too and there is
+# exactly one lv_conf.h in the build.
+add_compile_definitions(LV_CONF_PATH="${LV_BUILD_CONF_DIR}/lv_conf.h")
+
 set(CONFIG_LV_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(CONFIG_LV_BUILD_DEMOS OFF CACHE BOOL "" FORCE)
 set(CONFIG_LV_USE_THORVG_INTERNAL OFF CACHE BOOL "" FORCE)

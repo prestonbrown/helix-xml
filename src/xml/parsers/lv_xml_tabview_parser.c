@@ -81,11 +81,38 @@ void lv_xml_tabview_tab_bar_apply(lv_xml_parser_state_t * state, const char ** a
     lv_xml_obj_apply(state, attrs);
 }
 
+/**
+ * A tab's title is fixed at creation - lv_tabview_add_tab() builds the button and
+ * its label in one go - so unlike every other translatable attribute in this
+ * engine, translation_tag= cannot be handled in the apply chain. It has to pick
+ * WHICH LVGL call creates the tab.
+ *
+ * lv_tabview_set_tab_translation_tag() is that alternative creator: it adds the
+ * tab with a NULL title and calls lv_label_set_translation_tag() on the button's
+ * label, returning the same page pointer lv_tabview_add_tab() would. Because the
+ * tag ends up on a real lv_label, re-resolution is the label's own
+ * LV_EVENT_TRANSLATION_LANGUAGE_CHANGED arm - this parser stores nothing, owns
+ * no allocation, and needs no delete hook.
+ *
+ * PRECEDENCE differs from <lv_checkbox> and <lv_textarea> deliberately. Those
+ * resolve text= against translation_tag= by attribute ORDER, because their apply
+ * loop reaches the attributes in sequence and each setter clears the other. Here
+ * both attributes are read from the same array before anything exists, so there
+ * is no order to observe: translation_tag= simply wins whenever it is present
+ * and non-empty. An empty tag falls through to text=, so translation_tag=""
+ * behaves like the attribute being absent rather than blanking the title.
+ */
 void * lv_xml_tabview_tab_create(lv_xml_parser_state_t * state, const char ** attrs)
 {
+    lv_obj_t * parent = lv_xml_state_get_parent(state);
+
+#if LV_USE_TRANSLATION
+    const char * tag = lv_xml_get_value_of(attrs, "translation_tag");
+    if(tag && tag[0] != '\0') return lv_tabview_set_tab_translation_tag(parent, tag);
+#endif
+
     const char * text = lv_xml_get_value_of(attrs, "text");
-    void * item = lv_tabview_add_tab(lv_xml_state_get_parent(state), text);
-    return item;
+    return lv_tabview_add_tab(parent, text);
 }
 
 void lv_xml_tabview_tab_apply(lv_xml_parser_state_t * state, const char ** attrs)
@@ -93,6 +120,13 @@ void lv_xml_tabview_tab_apply(lv_xml_parser_state_t * state, const char ** attrs
     /* Consumed by lv_xml_tabview_tab_create() - the tab's title has to be known
      * before the tab exists, so it never reaches an apply chain. */
     lv_xml_attr_check_consume(state, "text");
+#if LV_USE_TRANSLATION
+    /* Same reason: consumed at create time, so the unknown-attribute check must
+     * not report it. Consumed unconditionally - including when it lost to text=
+     * by being empty - because it WAS read, and warning about it would send the
+     * author looking for a typo that is not there. */
+    lv_xml_attr_check_consume(state, "translation_tag");
+#endif
 
     /*Apply the common properties, e.g. width, height, styles flags etc*/
     lv_xml_obj_apply(state, attrs);

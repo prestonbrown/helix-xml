@@ -420,11 +420,16 @@ static void test_an_unknown_const_in_inline_text_applies_nothing(void)
 
 #if LV_USE_TRANSLATION
 
-/** en/de/fr, all complete. `cat` exists only for the two-tag checkbox cases. */
+/**
+ * en/de/fr, all complete. `cat` exists for the two-tag checkbox cases; `bird`
+ * only so the dropdown cases below have a three-option list, which is the
+ * shortest one where a selection can be non-zero AND not the last index.
+ */
 static const char * INLINE_PACK =
     "<translations languages=\"en de fr\">"
     "  <translation tag=\"dog\" en=\"Dog\" de=\"Hund\" fr=\"Chien\"/>"
     "  <translation tag=\"cat\" en=\"Cat\" de=\"Katze\" fr=\"Chat\"/>"
+    "  <translation tag=\"bird\" en=\"Bird\" de=\"Vogel\" fr=\"Oiseau\"/>"
     "</translations>";
 
 static void register_inline_pack(void)
@@ -695,6 +700,450 @@ static void test_a_checkbox_translation_tag_is_not_reported_as_an_unknown_attrib
                               "translation_tag= on a checkbox still warns as an unknown attribute");
 }
 
+/*===========================================================================
+ * options_tag= on <lv_dropdown>
+ *
+ * The dropdown's whole option list is one translatable unit: options_tag= is a
+ * newline-separated list of tags, re-resolved as a block on every language
+ * change. That block rewrite goes through lv_dropdown_set_options(), which
+ * resets sel_opt_id to 0 - so the interesting property is not "the strings
+ * translated" but "the strings translated AND the selected index survived".
+ *
+ * Every case here asserts the index explicitly and uses a non-zero, non-last
+ * selection, because a reset-to-0 and a clamp-to-last are both invisible to an
+ * assertion that only reads the selected string.
+ *==========================================================================*/
+
+/** The `&#10;` is how a newline is written inside an XML attribute value. */
+#define DD_TAGS "dog&#10;cat&#10;bird"
+
+/** Assert @p obj is a dropdown selecting index @p idx, whose text is @p s. */
+#define ASSERT_DROPDOWN_SELECTED(obj, idx, s)                                            \
+    do {                                                                                 \
+        lv_obj_t * hx_dd_ = (lv_obj_t *)(obj);                                           \
+        TEST_ASSERT_NOT_NULL_MESSAGE(hx_dd_, "ASSERT_DROPDOWN_SELECTED on a NULL object");\
+        TEST_ASSERT_TRUE_MESSAGE(lv_obj_check_type(hx_dd_, &lv_dropdown_class),          \
+                                 "object is not a dropdown");                            \
+        TEST_ASSERT_EQUAL_UINT32_MESSAGE((uint32_t)(idx), lv_dropdown_get_selected(hx_dd_), \
+                                         "wrong selected INDEX on the dropdown");        \
+        char hx_buf_[64];                                                                \
+        lv_dropdown_get_selected_str(hx_dd_, hx_buf_, sizeof(hx_buf_));                  \
+        TEST_ASSERT_EQUAL_STRING_MESSAGE((s), hx_buf_,                                   \
+                                         "wrong selected TEXT on the dropdown");         \
+    } while(0)
+
+/** Baseline: the tag list resolves through the active pack at parse time. */
+static void test_a_dropdown_options_tag_resolves_to_the_translated_options(void)
+{
+    register_inline_pack();
+    lv_translation_set_language("de");
+
+    lv_obj_t * root = BUILD("dd_i18n",
+                            COMPONENT("<lv_dropdown name=\"pick\" options_tag=\"" DD_TAGS "\"/>"));
+    lv_obj_t * pick = ASSERT_NAMED(root, "pick");
+
+    TEST_ASSERT_EQUAL_STRING_MESSAGE("Hund\nKatze\nVogel", lv_dropdown_get_options(pick),
+                                     "options_tag= did not resolve the whole list");
+}
+
+/**
+ * THE BUG. lv_dropdown_set_options() resets sel_opt_id to 0 (lv_dropdown.c:208),
+ * so re-translating on a language change used to throw away the user's choice
+ * and silently jump the widget to its first entry.
+ *
+ * Index 1 is deliberate: it is neither the value a reset produces (0) nor the
+ * value a clamp-to-last would produce (2), so both failure modes are visible.
+ * The option strings are asserted too, so the test cannot pass by re-translating
+ * nothing at all.
+ */
+static void test_a_dropdown_options_tag_keeps_the_selection_across_a_language_change(void)
+{
+    register_inline_pack();
+    lv_translation_set_language("en");
+
+    lv_obj_t * root = BUILD("dd_i18n_keep",
+                            COMPONENT("<lv_dropdown name=\"pick\" options_tag=\"" DD_TAGS "\"/>"));
+    lv_obj_t * pick = ASSERT_NAMED(root, "pick");
+
+    /* Stand in for the user opening the list and picking the middle entry. */
+    lv_dropdown_set_selected(pick, 1);
+    ASSERT_DROPDOWN_SELECTED(pick, 1, "Cat");
+
+    lv_translation_set_language("de");
+    helix_test_pump(30);
+    TEST_ASSERT_EQUAL_STRING_MESSAGE("Hund\nKatze\nVogel", lv_dropdown_get_options(pick),
+                                     "the options did not re-resolve on the language change");
+    ASSERT_DROPDOWN_SELECTED(pick, 1, "Katze");
+
+    /* Again, so this cannot pass by coincidentally landing on 1 once. */
+    lv_translation_set_language("fr");
+    helix_test_pump(30);
+    TEST_ASSERT_EQUAL_STRING_MESSAGE("Chien\nChat\nOiseau", lv_dropdown_get_options(pick),
+                                     "the options did not re-resolve on the second change");
+    ASSERT_DROPDOWN_SELECTED(pick, 1, "Chat");
+
+    /* And a selection made under one language survives into another. */
+    lv_dropdown_set_selected(pick, 2);
+    lv_translation_set_language("en");
+    helix_test_pump(30);
+    ASSERT_DROPDOWN_SELECTED(pick, 2, "Bird");
+}
+
+/**
+ * The same reset, reached through the apply loop instead of an event: attributes
+ * are applied in document order, so a selected= written BEFORE options_tag= was
+ * being wiped by the parse-time translate before the widget was ever shown.
+ */
+static void test_a_selected_attribute_before_options_tag_is_not_wiped_by_it(void)
+{
+    register_inline_pack();
+    lv_translation_set_language("de");
+
+    lv_obj_t * root = BUILD("dd_i18n_order",
+                            COMPONENT("<lv_dropdown name=\"pick\" selected=\"1\""
+                                      " options_tag=\"" DD_TAGS "\"/>"));
+
+    ASSERT_DROPDOWN_SELECTED(ASSERT_NAMED(root, "pick"), 1, "Katze");
+}
+
+/*===========================================================================
+ * placeholder_tag= on <lv_textarea>
+ *
+ * Same shape as the checkbox: lv_textarea has no tag field and no
+ * LV_EVENT_TRANSLATION_LANGUAGE_CHANGED arm, so the parser owns the tag on an
+ * event descriptor and re-resolves from the tree-wide language event.
+ *
+ * This replaced a parse-time lv_tr() whose comment claimed re-resolution was
+ * unnecessary "because inputs live in modals/wizards recreated on each open".
+ * Nothing enforced that, and it was false for three long-lived panels in the
+ * application. The tests below therefore switch the language under an ALREADY
+ * BUILT tree, which is exactly the case the old code got wrong.
+ *==========================================================================*/
+
+/** Assert @p obj is a textarea whose placeholder equals @p s. */
+#define ASSERT_PLACEHOLDER(obj, s)                                                       \
+    do {                                                                                 \
+        lv_obj_t * hx_ta_ = (lv_obj_t *)(obj);                                           \
+        TEST_ASSERT_NOT_NULL_MESSAGE(hx_ta_, "ASSERT_PLACEHOLDER on a NULL object");     \
+        TEST_ASSERT_TRUE_MESSAGE(lv_obj_check_type(hx_ta_, &lv_textarea_class),          \
+                                 "object is not a textarea, so it has no placeholder");  \
+        TEST_ASSERT_EQUAL_STRING_MESSAGE((s), lv_textarea_get_placeholder_text(hx_ta_),  \
+                                         "wrong placeholder on the textarea");           \
+    } while(0)
+
+/** Baseline: the tag resolves through the active pack at parse time. */
+static void test_a_placeholder_tag_resolves_to_the_translated_string(void)
+{
+    register_inline_pack();
+    lv_translation_set_language("de");
+
+    lv_obj_t * root = BUILD("ta_i18n",
+                            COMPONENT("<lv_textarea name=\"inp\" placeholder_tag=\"dog\"/>"));
+
+    ASSERT_PLACEHOLDER(ASSERT_NAMED(root, "inp"), "Hund");
+}
+
+/**
+ * THE BUG. The tag has to be STORED, not consulted once, so a language switch
+ * under a built tree updates the placeholder in place. The label in the same
+ * component is the control: if only the label moves, the textarea never joined
+ * the language-changed broadcast.
+ */
+static void test_a_placeholder_tag_re_resolves_on_a_language_change(void)
+{
+    register_inline_pack();
+    lv_translation_set_language("en");
+
+    lv_obj_t * root = BUILD("ta_i18n_switch",
+                            COMPONENT("<lv_textarea name=\"inp\" placeholder_tag=\"dog\"/>"
+                                      "<lv_label name=\"ref\" translation_tag=\"dog\"/>"));
+    lv_obj_t * inp = ASSERT_NAMED(root, "inp");
+    lv_obj_t * ref = ASSERT_NAMED(root, "ref");
+    ASSERT_PLACEHOLDER(inp, "Dog");
+
+    lv_translation_set_language("de");
+    helix_test_pump(30);
+    ASSERT_LABEL_TEXT(ref, "Hund");
+    ASSERT_PLACEHOLDER(inp, "Hund");
+
+    lv_translation_set_language("fr");
+    helix_test_pump(30);
+    ASSERT_PLACEHOLDER(inp, "Chien");
+
+    /* Back again, so this cannot pass by resolving to whatever was set last. */
+    lv_translation_set_language("en");
+    helix_test_pump(30);
+    ASSERT_LABEL_TEXT(ref, "Dog");
+    ASSERT_PLACEHOLDER(inp, "Dog");
+}
+
+/**
+ * A trailing placeholder_text= must win AND stop the widget following the
+ * language, the way lv_label_set_text() clears a label's stored tag. A textarea
+ * that kept the handler armed would snap back to "Hund" on the next switch and
+ * silently overwrite the literal.
+ */
+static void test_a_trailing_placeholder_text_stops_the_textarea_following_the_language(void)
+{
+    register_inline_pack();
+    lv_translation_set_language("en");
+
+    lv_obj_t * root = BUILD("ta_i18n_text_wins",
+                            COMPONENT("<lv_textarea name=\"inp\" placeholder_tag=\"dog\""
+                                      " placeholder_text=\"literal\"/>"));
+    lv_obj_t * inp = ASSERT_NAMED(root, "inp");
+    ASSERT_PLACEHOLDER(inp, "literal");
+
+    lv_translation_set_language("de");
+    helix_test_pump(30);
+    ASSERT_PLACEHOLDER(inp, "literal");
+}
+
+/** And the other order still lets the tag win, so precedence is document order. */
+static void test_a_trailing_placeholder_tag_beats_an_earlier_placeholder_text(void)
+{
+    register_inline_pack();
+    lv_translation_set_language("de");
+
+    lv_obj_t * root = BUILD("ta_i18n_tag_wins",
+                            COMPONENT("<lv_textarea name=\"inp\" placeholder_text=\"literal\""
+                                      " placeholder_tag=\"dog\"/>"));
+
+    ASSERT_PLACEHOLDER(ASSERT_NAMED(root, "inp"), "Hund");
+}
+
+/**
+ * An apply chain can run twice over one widget - the component's own view, then
+ * the attributes of the instance that used it. (The application's <text_input>
+ * wrapper forwards the whole attribute array into this parser, so this is not
+ * hypothetical.) The second tag has to REPLACE the first: two armed handlers
+ * would race on every language change and the loser's copy would leak - which
+ * LeakSanitizer would then fail the build over.
+ */
+static void test_a_second_placeholder_tag_replaces_the_first_rather_than_stacking(void)
+{
+    register_inline_pack();
+    lv_translation_set_language("en");
+
+    ASSERT_XML_REGISTERS("ta_i18n_leaf",
+                         "<component><view extends=\"lv_textarea\" placeholder_tag=\"dog\"/></component>");
+
+    lv_obj_t * root = BUILD("ta_i18n_host",
+                            COMPONENT("<ta_i18n_leaf name=\"plain\"/>"
+                                      "<ta_i18n_leaf name=\"inp\" placeholder_tag=\"cat\"/>"));
+    lv_obj_t * plain = ASSERT_NAMED(root, "plain");
+    lv_obj_t * inp = ASSERT_NAMED(root, "inp");
+
+    /* Premise check: the view's own tag really does reach the widget, so `inp`
+     * genuinely has a tag applied twice. Without this the rest is vacuous. */
+    ASSERT_PLACEHOLDER(plain, "Dog");
+    ASSERT_PLACEHOLDER(inp, "Cat");
+
+    /* The structural half. Text alone cannot see stacking: the two handlers fire
+     * in registration order, so the later tag wins the visible string either way.
+     * `plain` carries exactly one registration, so `inp` carrying more means the
+     * first tag was never taken down - and its copy was never freed. */
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(lv_obj_get_event_count(plain), lv_obj_get_event_count(inp),
+                                     "the overriding placeholder_tag= stacked another handler "
+                                     "instead of replacing the one already there");
+
+    lv_translation_set_language("de");
+    helix_test_pump(30);
+    ASSERT_PLACEHOLDER(inp, "Katze");
+}
+
+/* lv_mem_monitor() only reports anything under the BUILTIN allocator; an
+ * LV_STDLIB_CLIB build answers zero to everything, and a heap assertion there
+ * would fail on the configuration rather than on the behaviour. Gate the
+ * accounting so the CLIB/ASAN run still executes the create-destroy cycle -
+ * that is the run where the sanitizer, not this counter, is the adjudicator. */
+#if LV_USE_STDLIB_MALLOC == LV_STDLIB_BUILTIN
+    #define ASSERT_TAG_HEAP(cond, msg) TEST_ASSERT_TRUE_MESSAGE((cond), (msg))
+#else
+    #define ASSERT_TAG_HEAP(cond, msg) do { (void)(msg); } while(0)
+#endif
+
+/**
+ * The tag is a lv_strdup() the parser owns, handed to LVGL only as event user
+ * data - so nothing frees it except the LV_EVENT_DELETE arm registered beside
+ * the language handler. Drop that arm and every textarea built with a
+ * placeholder_tag leaks its tag for the life of the process.
+ *
+ * CI's sanitize job would catch this with LeakSanitizer, but LSan does not exist
+ * on every host the suite runs on (macOS/arm64 refuses detect_leaks outright), so
+ * the invariant is pinned here in the allocator LVGL can account for itself.
+ * Measured as a delta between whole build-and-destroy cycles rather than against
+ * a cold baseline, so one-time allocations elsewhere cannot read as a leak: a
+ * per-cycle leak shows up as free_size falling from one cycle to the next.
+ */
+static void test_a_placeholder_tag_is_freed_when_the_textarea_is_deleted(void)
+{
+    register_inline_pack();
+    lv_translation_set_language("en");
+
+    ASSERT_XML_REGISTERS("ta_i18n_leak",
+                         COMPONENT("<lv_textarea name=\"inp\" placeholder_tag=\"dog\"/>"));
+
+    size_t after_cycle[3];
+    for(uint32_t c = 0; c < 3; c++) {
+        lv_obj_t * inst = XML_CREATE(helix_test_env_screen(), "ta_i18n_leak", NULL);
+        helix_test_pump(30);
+        ASSERT_PLACEHOLDER(ASSERT_NAMED(inst, "inp"), "Dog");
+
+        lv_obj_delete(inst);
+        helix_test_pump(30);
+
+        lv_mem_monitor_t mon;
+        lv_mem_monitor(&mon);
+        after_cycle[c] = mon.free_size;
+    }
+
+    /* Cycle 0 is a warm-up and its figure is discarded - the first pass costs
+     * one-time state that later passes do not. Cycles 1 and 2 are like for like. */
+    ASSERT_TAG_HEAP(after_cycle[2] >= after_cycle[1],
+                    "free_size fell across identical build-and-destroy cycles - the "
+                    "placeholder tag copy is not being freed on LV_EVENT_DELETE");
+}
+
+/*===========================================================================
+ * translation_tag= on <lv_tabview-tab>
+ *
+ * The odd one out. A tab's title is fixed when the tab is built, so the parser
+ * cannot handle the attribute in an apply chain the way the checkbox and the
+ * textarea do - it has to choose between lv_tabview_add_tab() and
+ * lv_tabview_set_tab_translation_tag() at CREATE time.
+ *
+ * The payoff is that re-resolution comes for free: the tag lands on the tab
+ * button's real lv_label, so the label's own language handler does the work and
+ * the parser stores nothing. The cases below still assert the re-resolution,
+ * because "LVGL handles it" is exactly the kind of claim that stops being true
+ * silently.
+ *==========================================================================*/
+
+/** The visible title of tab @p idx: the label LVGL puts inside the tab button. */
+static const char * tab_title(lv_obj_t * tv, int32_t idx)
+{
+    lv_obj_t * btn = lv_tabview_get_tab_button(tv, idx);
+    TEST_ASSERT_NOT_NULL_MESSAGE(btn, "the tabview has no button at that index");
+    lv_obj_t * lbl = lv_obj_get_child_by_type(btn, 0, &lv_label_class);
+    TEST_ASSERT_NOT_NULL_MESSAGE(lbl, "the tab button has no label");
+    return lv_label_get_text(lbl);
+}
+
+/** Baseline: the tag resolves through the active pack when the tab is built. */
+static void test_a_tab_translation_tag_resolves_to_the_translated_title(void)
+{
+    register_inline_pack();
+    lv_translation_set_language("de");
+
+    lv_obj_t * root = BUILD("tv_i18n",
+                            COMPONENT("<lv_tabview name=\"tv\">"
+                                      "  <lv_tabview-tab translation_tag=\"dog\"/>"
+                                      "  <lv_tabview-tab text=\"literal\"/>"
+                                      "</lv_tabview>"));
+    lv_obj_t * tv = ASSERT_NAMED(root, "tv");
+
+    TEST_ASSERT_EQUAL_STRING_MESSAGE("Hund", tab_title(tv, 0),
+                                     "translation_tag= on a tab was not resolved");
+    /* The control: a plain text= tab in the same tabview is untouched, so the
+     * assertion above cannot be satisfied by some tabview-wide translation. */
+    TEST_ASSERT_EQUAL_STRING_MESSAGE("literal", tab_title(tv, 1),
+                                     "text= on a tab stopped working");
+}
+
+/**
+ * The half that distinguishes a stored tag from a one-shot lv_tr(). This works
+ * only because lv_tabview_set_tab_translation_tag() delegates to
+ * lv_label_set_translation_tag() on the button's label - if that delegation ever
+ * changes to a plain lv_label_set_text(), this is what catches it.
+ */
+static void test_a_tab_translation_tag_re_resolves_on_a_language_change(void)
+{
+    register_inline_pack();
+    lv_translation_set_language("en");
+
+    lv_obj_t * root = BUILD("tv_i18n_switch",
+                            COMPONENT("<lv_tabview name=\"tv\">"
+                                      "  <lv_tabview-tab translation_tag=\"dog\"/>"
+                                      "  <lv_tabview-tab text=\"literal\"/>"
+                                      "</lv_tabview>"));
+    lv_obj_t * tv = ASSERT_NAMED(root, "tv");
+    TEST_ASSERT_EQUAL_STRING("Dog", tab_title(tv, 0));
+
+    lv_translation_set_language("de");
+    helix_test_pump(30);
+    TEST_ASSERT_EQUAL_STRING_MESSAGE("Hund", tab_title(tv, 0),
+                                     "the tab title did not follow the language change");
+    TEST_ASSERT_EQUAL_STRING_MESSAGE("literal", tab_title(tv, 1),
+                                     "a literal tab title was overwritten by the language change");
+
+    /* Back again, so this cannot pass by resolving to whatever was set last. */
+    lv_translation_set_language("en");
+    helix_test_pump(30);
+    TEST_ASSERT_EQUAL_STRING("Dog", tab_title(tv, 0));
+}
+
+/**
+ * PRECEDENCE, and the reason it is worth its own test: it does NOT match the
+ * checkbox's. Both attributes are read from the same array before the tab
+ * exists, so there is no apply order to observe and translation_tag= wins in
+ * either writing order. Both orders are asserted so the rule cannot quietly
+ * become order-sensitive.
+ */
+static void test_a_tab_translation_tag_beats_text_in_either_order(void)
+{
+    register_inline_pack();
+    lv_translation_set_language("de");
+
+    lv_obj_t * root = BUILD("tv_i18n_order",
+                            COMPONENT("<lv_tabview name=\"tv\">"
+                                      "  <lv_tabview-tab text=\"literal\" translation_tag=\"dog\"/>"
+                                      "  <lv_tabview-tab translation_tag=\"dog\" text=\"literal\"/>"
+                                      "</lv_tabview>"));
+    lv_obj_t * tv = ASSERT_NAMED(root, "tv");
+
+    TEST_ASSERT_EQUAL_STRING_MESSAGE("Hund", tab_title(tv, 0),
+                                     "translation_tag= lost to an earlier text= on a tab");
+    TEST_ASSERT_EQUAL_STRING_MESSAGE("Hund", tab_title(tv, 1),
+                                     "translation_tag= lost to a later text= on a tab");
+}
+
+/** An empty tag is treated as absent, so text= still applies rather than blanking. */
+static void test_an_empty_tab_translation_tag_falls_through_to_text(void)
+{
+    register_inline_pack();
+    lv_translation_set_language("de");
+
+    lv_obj_t * root = BUILD("tv_i18n_empty",
+                            COMPONENT("<lv_tabview name=\"tv\">"
+                                      "  <lv_tabview-tab text=\"literal\" translation_tag=\"\"/>"
+                                      "</lv_tabview>"));
+
+    TEST_ASSERT_EQUAL_STRING_MESSAGE("literal", tab_title(ASSERT_NAMED(root, "tv"), 0),
+                                     "an empty translation_tag= blanked the tab title");
+}
+
+/**
+ * The attribute is consumed at create time, so the unknown-attribute check has
+ * to be told about it explicitly - nothing in the apply chain ever sees it.
+ * Without the lv_xml_attr_check_consume() call this warns on every tagged tab.
+ */
+static void test_a_tab_translation_tag_is_not_reported_as_an_unknown_attribute(void)
+{
+    register_inline_pack();
+
+    log_capture_start();
+    lv_obj_t * root = BUILD("tv_i18n_quiet",
+                            COMPONENT("<lv_tabview name=\"tv\">"
+                                      "  <lv_tabview-tab translation_tag=\"dog\"/>"
+                                      "</lv_tabview>"));
+    log_capture_stop();
+
+    ASSERT_NAMED(root, "tv");
+    TEST_ASSERT_FALSE_MESSAGE(log_contains("Unknown attribute"),
+                              "translation_tag= on a tab still warns as an unknown attribute");
+}
+
 #endif /* LV_USE_TRANSLATION */
 
 /*---------------------------------------------------------------------------
@@ -745,6 +1194,23 @@ int main(void)
     RUN_TEST(test_a_trailing_text_attribute_stops_the_checkbox_following_the_language);
     RUN_TEST(test_a_second_translation_tag_replaces_the_first_rather_than_stacking);
     RUN_TEST(test_a_checkbox_translation_tag_is_not_reported_as_an_unknown_attribute);
+
+    RUN_TEST(test_a_dropdown_options_tag_resolves_to_the_translated_options);
+    RUN_TEST(test_a_dropdown_options_tag_keeps_the_selection_across_a_language_change);
+    RUN_TEST(test_a_selected_attribute_before_options_tag_is_not_wiped_by_it);
+
+    RUN_TEST(test_a_placeholder_tag_resolves_to_the_translated_string);
+    RUN_TEST(test_a_placeholder_tag_re_resolves_on_a_language_change);
+    RUN_TEST(test_a_trailing_placeholder_text_stops_the_textarea_following_the_language);
+    RUN_TEST(test_a_trailing_placeholder_tag_beats_an_earlier_placeholder_text);
+    RUN_TEST(test_a_second_placeholder_tag_replaces_the_first_rather_than_stacking);
+    RUN_TEST(test_a_placeholder_tag_is_freed_when_the_textarea_is_deleted);
+
+    RUN_TEST(test_a_tab_translation_tag_resolves_to_the_translated_title);
+    RUN_TEST(test_a_tab_translation_tag_re_resolves_on_a_language_change);
+    RUN_TEST(test_a_tab_translation_tag_beats_text_in_either_order);
+    RUN_TEST(test_an_empty_tab_translation_tag_falls_through_to_text);
+    RUN_TEST(test_a_tab_translation_tag_is_not_reported_as_an_unknown_attribute);
 #endif
 
     return UNITY_END();

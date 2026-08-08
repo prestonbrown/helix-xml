@@ -117,8 +117,28 @@ void lv_xml_dropdown_list_apply(lv_xml_parser_state_t * state, const char ** att
  **********************/
 
 #if LV_USE_TRANSLATION
+/**
+ * Re-resolve every tag in the newline-separated @p tags list and push the result
+ * back as the dropdown's options.
+ *
+ * SELECTION PRESERVATION. lv_dropdown_set_options() unconditionally resets
+ * sel_opt_id to 0, so re-translating on a language change would silently discard
+ * whatever the user had picked and jump the widget back to its first entry. The
+ * selected INDEX is the thing that survives a language change - the option
+ * strings themselves are expected to change out from under it - so the index is
+ * captured before the rewrite and restored after.
+ *
+ * A well-formed pack cannot shorten the list: the tag list is fixed at parse
+ * time and every tag resolves to exactly one line, missing translations included
+ * (lv_tr() falls back to the tag itself). A malformed pack still must not index
+ * out of range, so the restore is clamped to the last valid option rather than
+ * trusted. Clamping keeps the selection as near as the new list allows; falling
+ * back to 0 would reintroduce the very jump this exists to prevent.
+ */
 static void dropdown_translate_options(lv_obj_t * dd, const char * tags)
 {
+    const uint32_t sel_before = lv_dropdown_get_selected(dd);
+
     /* Count total length needed */
     uint32_t total_len = 0;
     const char * p = tags;
@@ -173,6 +193,11 @@ static void dropdown_translate_options(lv_obj_t * dd, const char * tags)
 
     lv_dropdown_set_options(dd, buf);
     lv_free(buf);
+
+    const uint32_t count = lv_dropdown_get_option_count(dd);
+    if(count == 0) return; /*Nothing to select; leave the widget as set_options left it*/
+
+    lv_dropdown_set_selected(dd, sel_before < count ? sel_before : count - 1);
 }
 
 static void dropdown_on_language_changed(lv_event_t * e)

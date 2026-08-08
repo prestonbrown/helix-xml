@@ -82,7 +82,7 @@ if(LVGL_DIR)
     # applied to it, and some of those inject calls to app-side symbols
     # (helix_crash_note_*) that only exist when linking the application. A
     # standalone test build has no such symbols, so the configure succeeds, the
-    # compile succeeds, and every one of the twelve executables dies at link
+    # compile succeeds, and every one of the 21 executables dies at link
     # time with a wall of "Undefined symbols ... referenced from liblvgl.a"
     # that says nothing about the real cause.
     #

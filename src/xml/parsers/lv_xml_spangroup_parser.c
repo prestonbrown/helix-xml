@@ -57,6 +57,8 @@ void lv_xml_spangroup_apply(lv_xml_parser_state_t * state, const char ** attrs)
 
     lv_xml_obj_apply(state, attrs); /*Apply the common properties, e.g. width, height, styles flags etc*/
 
+    lv_xml_attr_check_enter(state);
+
     for(int i = 0; attrs[i]; i += 2) {
         const char * name = attrs[i];
         const char * value = attrs[i + 1];
@@ -64,6 +66,7 @@ void lv_xml_spangroup_apply(lv_xml_parser_state_t * state, const char ** attrs)
         if(lv_streq("overflow", name)) lv_spangroup_set_overflow(item, spangroup_overflow_to_enum(value));
         else if(lv_streq("max_lines", name)) lv_spangroup_set_max_lines(item, lv_xml_atoi(value));
         else if(lv_streq("indent", name)) lv_spangroup_set_indent(item, lv_xml_atoi(value));
+        else lv_xml_attr_check_miss(state, name);
     }
 }
 
@@ -81,6 +84,11 @@ void lv_xml_spangroup_span_apply(lv_xml_parser_state_t * state, const char ** at
 
     lv_obj_t * spangroup = lv_xml_state_get_parent(state);
     lv_span_t * span = lv_xml_state_get_item(state);
+
+    lv_xml_attr_check_enter(state);
+    /* Read out of band from inside the bind_text branch, so no if/else-if arm
+     * ever matches its name. */
+    lv_xml_attr_check_consume(state, "bind_text-fmt");
 
     for(int i = 0; attrs[i]; i += 2) {
         const char * name = attrs[i];
@@ -104,6 +112,7 @@ void lv_xml_spangroup_span_apply(lv_xml_parser_state_t * state, const char ** at
             }
             lv_spangroup_bind_span_text(spangroup, span, subject, fmt);
         }
+        else lv_xml_attr_check_miss(state, name);
     }
 }
 

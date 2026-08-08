@@ -56,12 +56,15 @@ void lv_xml_table_apply(lv_xml_parser_state_t * state, const char ** attrs)
 
     lv_xml_obj_apply(state, attrs); /*Apply the common properties, e.g. width, height, styles flags etc*/
 
+    lv_xml_attr_check_enter(state);
+
     for(int i = 0; attrs[i]; i += 2) {
         const char * name = attrs[i];
         const char * value = attrs[i + 1];
 
         if(lv_streq("column_count", name)) lv_table_set_column_count(item, lv_xml_atoi(value));
         else if(lv_streq("row_count", name)) lv_table_set_row_count(item, lv_xml_atoi(value));
+        else lv_xml_attr_check_miss(state, name);
     }
 }
 
@@ -81,11 +84,17 @@ void lv_xml_table_column_apply(lv_xml_parser_state_t * state, const char ** attr
     lv_obj_t * table = lv_xml_state_get_parent(state);
     int32_t column = lv_xml_atoi(lv_xml_get_value_of(attrs, "column"));
 
+    lv_xml_attr_check_enter(state);
+    /* Addresses the column the chain's `width` applies to; read above, never
+     * matched by an if/else-if arm. */
+    lv_xml_attr_check_consume(state, "column");
+
     for(int i = 0; attrs[i]; i += 2) {
         const char * name = attrs[i];
         const char * value = attrs[i + 1];
 
         if(lv_streq("width", name))  lv_table_set_column_width(table, column, lv_xml_atoi(value));
+        else lv_xml_attr_check_miss(state, name);
     }
 }
 
@@ -106,12 +115,18 @@ void lv_xml_table_cell_apply(lv_xml_parser_state_t * state, const char ** attrs)
     int32_t row = lv_xml_atoi(lv_xml_get_value_of(attrs, "row"));
     int32_t column = lv_xml_atoi(lv_xml_get_value_of(attrs, "column"));
 
+    lv_xml_attr_check_enter(state);
+    /* Address the cell the chain's `value`/`ctrl` apply to; read above, never
+     * matched by an if/else-if arm. */
+    lv_xml_attr_check_consume(state, "row");
+    lv_xml_attr_check_consume(state, "column");
+
     for(int i = 0; attrs[i]; i += 2) {
         const char * name = attrs[i];
         const char * value = attrs[i + 1];
 
         if(lv_streq("value", name))  lv_table_set_cell_value(table, row, column, value);
-        if(lv_streq("ctrl", name)) {
+        else if(lv_streq("ctrl", name)) {
             lv_table_cell_ctrl_t ctrl = 0;
             char buf[256];
             lv_strncpy(buf, value, sizeof(buf));
@@ -123,6 +138,7 @@ void lv_xml_table_cell_apply(lv_xml_parser_state_t * state, const char ** attrs)
 
             lv_table_set_cell_ctrl(table, row, column, ctrl);
         }
+        else lv_xml_attr_check_miss(state, name);
     }
 }
 

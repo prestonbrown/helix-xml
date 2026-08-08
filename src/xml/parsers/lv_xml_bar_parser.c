@@ -55,6 +55,12 @@ void lv_xml_bar_apply(lv_xml_parser_state_t * state, const char ** attrs)
     void * item = lv_xml_state_get_item(state);
     lv_xml_obj_apply(state, attrs); /*Apply the common properties, e.g. width, height, styles flags etc*/
 
+    lv_xml_attr_check_enter(state);
+    /* Modifiers read out of band from inside another attribute's branch, so no
+     * if/else-if arm ever matches their name. */
+    lv_xml_attr_check_consume(state, "value-animated");
+    lv_xml_attr_check_consume(state, "start_value-animated");
+
     for(int i = 0; attrs[i]; i += 2) {
         const char * name = attrs[i];
         const char * value = attrs[i + 1];
@@ -84,6 +90,7 @@ void lv_xml_bar_apply(lv_xml_parser_state_t * state, const char ** attrs)
                 LV_LOG_WARN("Subject \"%s\" doesn't exist in bar bind_value", value);
             }
         }
+        else lv_xml_attr_check_miss(state, name);
     }
 }
 

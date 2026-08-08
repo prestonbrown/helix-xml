@@ -55,12 +55,15 @@ void lv_xml_tabview_apply(lv_xml_parser_state_t * state, const char ** attrs)
 
     lv_xml_obj_apply(state, attrs); /*Apply the common properties, e.g. width, height, styles flags etc*/
 
+    lv_xml_attr_check_enter(state);
+
     for(int i = 0; attrs[i]; i += 2) {
         const char * name = attrs[i];
         const char * value = attrs[i + 1];
 
         if(lv_streq("active", name)) lv_tabview_set_active(item, lv_xml_atoi(value), 0);
-        if(lv_streq("tab_bar_position", name)) lv_tabview_set_tab_bar_position(item, lv_xml_dir_to_enum(value));
+        else if(lv_streq("tab_bar_position", name)) lv_tabview_set_tab_bar_position(item, lv_xml_dir_to_enum(value));
+        else lv_xml_attr_check_miss(state, name);
     }
 }
 
@@ -87,6 +90,10 @@ void * lv_xml_tabview_tab_create(lv_xml_parser_state_t * state, const char ** at
 
 void lv_xml_tabview_tab_apply(lv_xml_parser_state_t * state, const char ** attrs)
 {
+    /* Consumed by lv_xml_tabview_tab_create() - the tab's title has to be known
+     * before the tab exists, so it never reaches an apply chain. */
+    lv_xml_attr_check_consume(state, "text");
+
     /*Apply the common properties, e.g. width, height, styles flags etc*/
     lv_xml_obj_apply(state, attrs);
 }
@@ -115,6 +122,10 @@ void * lv_xml_tabview_tab_button_create(lv_xml_parser_state_t * state, const cha
 
 void lv_xml_tabview_tab_button_apply(lv_xml_parser_state_t * state, const char ** attrs)
 {
+    /* Consumed by lv_xml_tabview_tab_button_create(), which uses it to pick
+     * WHICH existing button this element addresses. */
+    lv_xml_attr_check_consume(state, "index");
+
     /*Apply the common properties, e.g. width, height, styles flags etc*/
     lv_xml_obj_apply(state, attrs);
 }

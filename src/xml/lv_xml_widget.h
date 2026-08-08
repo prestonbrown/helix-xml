@@ -33,6 +33,12 @@ typedef struct _lv_widget_processor_t {
     const char * name;
     lv_xml_widget_create_cb_t create_cb;
     lv_xml_widget_apply_cb_t apply_cb;
+    /** Registered by lv_xml_init(), i.e. `apply_cb` is one of this library's
+     *  own chains and its misses can be trusted. Application widgets registered
+     *  through lv_xml_register_widget() are never marked, which is what keeps
+     *  the unknown-attribute check from firing on attributes their apply_cb
+     *  deliberately ignores. Set by lv_xml_widget_mark_all_builtin(). */
+    bool builtin;
     struct _lv_widget_processor_t * next;
 } lv_widget_processor_t;
 
@@ -53,6 +59,15 @@ typedef struct _lv_widget_processor_t {
  */
 lv_result_t lv_xml_register_widget(const char * name, lv_xml_widget_create_cb_t create_cb,
                                    lv_xml_widget_apply_cb_t apply_cb);
+
+/**
+ * Mark every Widget registered so far as built-in.
+ *
+ * Called once at the end of lv_xml_init(), after the library has registered its
+ * own processors and before any application code can register its own. See
+ * lv_widget_processor_t::builtin.
+ */
+void lv_xml_widget_mark_all_builtin(void);
 
 /**
  * Free every registered Widget descriptor and reset the registry to empty.

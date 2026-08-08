@@ -58,6 +58,8 @@ void lv_xml_chart_apply(lv_xml_parser_state_t * state, const char ** attrs)
 
     lv_xml_obj_apply(state, attrs); /*Apply the common properties, e.g. width, height, styles flags etc*/
 
+    lv_xml_attr_check_enter(state);
+
     for(int i = 0; attrs[i]; i += 2) {
         const char * name = attrs[i];
         const char * value = attrs[i + 1];
@@ -78,6 +80,7 @@ void lv_xml_chart_apply(lv_xml_parser_state_t * state, const char ** attrs)
         else if(lv_streq("ver_div_line_count", name)) {
             lv_chart_set_ver_div_line_count(item, lv_xml_atoi(value));
         }
+        else lv_xml_attr_check_miss(state, name);
     }
 }
 
@@ -101,6 +104,12 @@ void lv_xml_chart_series_apply(lv_xml_parser_state_t * state, const char ** attr
     lv_obj_t * chart = lv_xml_state_get_parent(state);
     lv_chart_series_t * ser = lv_xml_state_get_item(state);
 
+    lv_xml_attr_check_enter(state);
+    /* Consumed by lv_xml_chart_series_create(), which runs before this and is
+     * not part of any if/else-if chain. */
+    lv_xml_attr_check_consume(state, "color");
+    lv_xml_attr_check_consume(state, "axis");
+
     for(int i = 0; attrs[i]; i += 2) {
         const char * name = attrs[i];
         const char * value = attrs[i + 1];
@@ -111,6 +120,7 @@ void lv_xml_chart_series_apply(lv_xml_parser_state_t * state, const char ** attr
                 lv_chart_set_next_value(chart, ser, v);
             }
         }
+        else lv_xml_attr_check_miss(state, name);
     }
 }
 
@@ -135,12 +145,19 @@ void lv_xml_chart_cursor_apply(lv_xml_parser_state_t * state, const char ** attr
     lv_obj_t * chart = lv_xml_state_get_parent(state);
     lv_chart_cursor_t * cursor = lv_xml_state_get_item(state);
 
+    lv_xml_attr_check_enter(state);
+    /* Consumed by lv_xml_chart_cursor_create(), which runs before this and is
+     * not part of any if/else-if chain. */
+    lv_xml_attr_check_consume(state, "color");
+    lv_xml_attr_check_consume(state, "dir");
+
     for(int i = 0; attrs[i]; i += 2) {
         const char * name = attrs[i];
         const char * value = attrs[i + 1];
 
         if(lv_streq("pos_x", name)) lv_chart_set_cursor_pos_x(chart, cursor, lv_xml_atoi(value));
-        if(lv_streq("pos_y", name)) lv_chart_set_cursor_pos_y(chart, cursor, lv_xml_atoi(value));
+        else if(lv_streq("pos_y", name)) lv_chart_set_cursor_pos_y(chart, cursor, lv_xml_atoi(value));
+        else lv_xml_attr_check_miss(state, name);
     }
 }
 
@@ -160,12 +177,18 @@ void lv_xml_chart_axis_apply(lv_xml_parser_state_t * state, const char ** attrs)
     lv_obj_t * chart = lv_xml_state_get_parent(state);
     lv_chart_axis_t axis = chart_axis_to_enum(lv_xml_get_value_of(attrs, "axis"));
 
+    lv_xml_attr_check_enter(state);
+    /* Selects which axis the chain's min_value/max_value apply to; read above,
+     * never matched by an if/else-if arm. */
+    lv_xml_attr_check_consume(state, "axis");
+
     for(int i = 0; attrs[i]; i += 2) {
         const char * name = attrs[i];
         const char * value = attrs[i + 1];
 
         if(lv_streq("min_value", name)) lv_chart_set_axis_min_value(chart, axis, lv_xml_atoi(value));
-        if(lv_streq("max_value", name)) lv_chart_set_axis_max_value(chart, axis, lv_xml_atoi(value));
+        else if(lv_streq("max_value", name)) lv_chart_set_axis_max_value(chart, axis, lv_xml_atoi(value));
+        else lv_xml_attr_check_miss(state, name);
     }
 }
 

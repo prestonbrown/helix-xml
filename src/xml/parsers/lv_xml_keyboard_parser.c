@@ -55,13 +55,16 @@ void lv_xml_keyboard_apply(lv_xml_parser_state_t * state, const char ** attrs)
 
     lv_xml_obj_apply(state, attrs); /*Apply the common properties, e.g. width, height, styles flags etc*/
 
+    lv_xml_attr_check_enter(state);
+
     for(int i = 0; attrs[i]; i += 2) {
         const char * name = attrs[i];
         const char * value = attrs[i + 1];
 
         //        if(lv_streq("textarea", name)) lv_keyboard_set_mode(item, lv_obj_get_child_by_name());
         if(lv_streq("mode", name)) lv_keyboard_set_mode(item, mode_text_to_enum_value(value));
-        if(lv_streq("popovers", name)) lv_keyboard_set_popovers(item, lv_xml_to_bool(value));
+        else if(lv_streq("popovers", name)) lv_keyboard_set_popovers(item, lv_xml_to_bool(value));
+        else lv_xml_attr_check_miss(state, name);
     }
 }
 

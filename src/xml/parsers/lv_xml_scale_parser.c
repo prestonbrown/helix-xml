@@ -59,6 +59,8 @@ void lv_xml_scale_apply(lv_xml_parser_state_t * state, const char ** attrs)
 
     //    <prop name="text_src" type="string[NULL]" help=""/>
 
+    lv_xml_attr_check_enter(state);
+
     for(int i = 0; attrs[i]; i += 2) {
         const char * name = attrs[i];
         const char * value = attrs[i + 1];
@@ -73,6 +75,7 @@ void lv_xml_scale_apply(lv_xml_parser_state_t * state, const char ** attrs)
         else if(lv_streq("max_value", name)) lv_scale_set_max_value(item, lv_xml_atoi(value));
         else if(lv_streq("angle_range", name)) lv_scale_set_angle_range(item, lv_xml_atoi(value));
         else if(lv_streq("rotation", name)) lv_scale_set_rotation(item, lv_xml_atoi(value));
+        else lv_xml_attr_check_miss(state, name);
     }
 }
 
@@ -90,6 +93,8 @@ void lv_xml_scale_section_apply(lv_xml_parser_state_t * state, const char ** att
 
     lv_obj_t * scale = lv_xml_state_get_parent(state);
     lv_scale_section_t * section = lv_xml_state_get_item(state);
+
+    lv_xml_attr_check_enter(state);
 
     for(int i = 0; attrs[i]; i += 2) {
         const char * name = attrs[i];
@@ -127,6 +132,7 @@ void lv_xml_scale_section_apply(lv_xml_parser_state_t * state, const char ** att
                 LV_LOG_WARN("Subject \"%s\" doesn't exist in scale section's bind_max_value", value);
             }
         }
+        else lv_xml_attr_check_miss(state, name);
     }
 }
 

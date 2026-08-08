@@ -54,6 +54,12 @@ void lv_xml_roller_apply(lv_xml_parser_state_t * state, const char ** attrs)
     void * item = lv_xml_state_get_item(state);
     lv_xml_obj_apply(state, attrs); /*Apply the common properties, e.g. width, height, styles flags etc*/
 
+    lv_xml_attr_check_enter(state);
+    /* Modifiers read out of band from inside another attribute's branch, so no
+     * if/else-if arm ever matches their name. */
+    lv_xml_attr_check_consume(state, "value-animated");
+    lv_xml_attr_check_consume(state, "options-mode");
+
     for(int i = 0; attrs[i]; i += 2) {
         const char * name = attrs[i];
         const char * value = attrs[i + 1];
@@ -64,11 +70,11 @@ void lv_xml_roller_apply(lv_xml_parser_state_t * state, const char ** attrs)
             bool anim = anim_str ? lv_xml_to_bool(anim_str) : false;
             lv_roller_set_selected(item, v, anim);
         }
-        if(lv_streq("visible_row_count", name)) {
+        else if(lv_streq("visible_row_count", name)) {
             lv_roller_set_visible_row_count(item, lv_xml_atoi(value));
         }
 
-        if(lv_streq("options", name)) {
+        else if(lv_streq("options", name)) {
             const char * mode_str = lv_xml_get_value_of(attrs, "options-mode");
             lv_roller_mode_t mode = mode_str ? mode_text_to_enum_value(mode_str) : LV_ROLLER_MODE_NORMAL;
             lv_roller_set_options(item, value, mode);
@@ -82,6 +88,7 @@ void lv_xml_roller_apply(lv_xml_parser_state_t * state, const char ** attrs)
                 LV_LOG_WARN("Subject \"%s\" doesn't exist in roller bind_value", value);
             }
         }
+        else lv_xml_attr_check_miss(state, name);
     }
 }
 

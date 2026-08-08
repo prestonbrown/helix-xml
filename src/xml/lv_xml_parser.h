@@ -28,6 +28,11 @@ extern "C" {
  *      DEFINES
  *********************/
 
+/** Attribute slots (names AND values, so half this many attributes) the
+ *  unknown-attribute check can track for one element. Past it the check is
+ *  skipped entirely - see lv_xml_attr_check_begin(). */
+#define LV_XML_ATTR_CHECK_MAX 128
+
 /**********************
  *      TYPEDEFS
  **********************/
@@ -125,6 +130,18 @@ struct _lv_xml_parser_state_t {
     char **  composed_strings;
     uint32_t composed_count;
     uint32_t composed_cap;
+    /* Unknown-attribute check for the element currently being applied. Armed by
+     * the caller in lv_xml.c, and only for engine-registered widgets; see
+     * lv_xml_attr_check.h for why the bookkeeping is a miss COUNT rather than a
+     * table of legal names. `attr_check_attrs` doubles as the armed flag and is
+     * borrowed, never owned - the array outlives the apply_cb call it describes.
+     * Not nested: apply_cb chains call each other but never a second element's. */
+    const char ** attr_check_attrs;
+    const char *  attr_check_widget;
+    uint8_t attr_check_count;         /**< tracked slots, names and values both */
+    uint8_t attr_check_participants;  /**< chains that promised to report misses */
+    uint8_t attr_check_miss[LV_XML_ATTR_CHECK_MAX];
+    uint8_t attr_check_handled[LV_XML_ATTR_CHECK_MAX];
 };
 
 /**********************

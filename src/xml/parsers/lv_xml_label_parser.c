@@ -55,6 +55,11 @@ void lv_xml_label_apply(lv_xml_parser_state_t * state, const char ** attrs)
 
     lv_xml_obj_apply(state, attrs); /*Apply the common properties, e.g. width, height, styles flags etc*/
 
+    lv_xml_attr_check_enter(state);
+    /* Read out of band from inside the bind_text branch, so no if/else-if arm
+     * ever matches its name. */
+    lv_xml_attr_check_consume(state, "bind_text-fmt");
+
     for(int i = 0; attrs[i]; i += 2) {
         const char * name = attrs[i];
         const char * value = attrs[i + 1];
@@ -77,6 +82,7 @@ void lv_xml_label_apply(lv_xml_parser_state_t * state, const char ** attrs)
             }
             lv_label_bind_text(item, subject, fmt);
         }
+        else lv_xml_attr_check_miss(state, name);
     }
 }
 

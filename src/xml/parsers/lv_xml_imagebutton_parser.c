@@ -57,11 +57,14 @@ void lv_xml_imagebutton_apply(lv_xml_parser_state_t * state, const char ** attrs
 
     lv_xml_obj_apply(state, attrs); /*Apply the common properties, e.g. width, height, styles flags etc*/
 
+    lv_xml_attr_check_enter(state);
+
     for(int i = 0; attrs[i]; i += 2) {
         const char * name = attrs[i];
         const char * value = attrs[i + 1];
 
         if(lv_streq("state", name)) lv_imagebutton_set_state(item, imagebutton_state_to_enum(value));
+        else lv_xml_attr_check_miss(state, name);
     }
 }
 

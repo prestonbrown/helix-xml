@@ -20,6 +20,7 @@ extern "C" {
 
 #include "parsers/lv_xml_obj_parser.h"
 #include "lv_xml_parser.h"
+#include "lv_xml_attr_check.h"
 #include "lv_xml_base_types.h"
 #include "lv_xml_utils.h"
 #include "lv_xml_style.h"

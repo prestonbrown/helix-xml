@@ -65,6 +65,12 @@
 /* Log capture: a single malformed input can produce several messages, one of
  * which quotes a 300-character tag name back at us - see the buffer size note
  * in the header. */
+/* The custom-widget test registers a processor of its own, which means reaching
+ * the parser state and lv_obj's shared apply the same way a real application
+ * widget does. */
+#include "xml/lv_xml_parser.h"
+#include "xml/parsers/lv_xml_obj_parser.h"
+
 #include "helpers/helix_log_capture.h"
 #include "helpers/helix_test_env.h"
 #include "helpers/helix_test_pump.h"
@@ -538,34 +544,59 @@ static void test_unknown_widget_name_warns_but_keeps_following_siblings_in_place
 }
 
 /**
- * An unknown ATTRIBUTE on a KNOWN widget is accepted in total silence, and the
- * widget's real attributes still apply.
+ * An unknown ATTRIBUTE on a KNOWN widget warns, naming both the attribute and
+ * the widget, and the widget's real attributes still apply.
  *
- * PINS CURRENT BEHAVIOUR - suspected bug: every widget's apply_cb is an
- * if/else-if chain with no terminating else, so `txet="Hello"` or a made-up
- * `bogus_attr` is indistinguishable from a correctly spelled one. A typo in a
- * layout file produces no diagnostic at any log level; the widget simply comes
- * out wrong. Compare the unknown-ENUM path below, which does warn.
+ * The failure mode being caught is an ordinary typo. Attribute dispatch is
+ * composed - lv_xml_label_apply() handles `text`, lv_xml_obj_apply() handles
+ * `width`, and neither one alone can tell a valid name from a misspelled one -
+ * so for a long time a typo produced no diagnostic at any log level and the
+ * widget just came out wrong. The warning is the only observable difference
+ * between "you misspelled it" and "you never wrote it", which is why it is
+ * asserted per row.
+ *
+ * The message must name the WIDGET as well as the attribute: "unknown attribute
+ * txet" alone does not tell you which of the six elements on the line to look
+ * at, and `text` is valid on lv_label but not on lv_button.
  */
-static void test_unknown_attribute_on_a_known_widget_is_silently_ignored(void)
+static void test_unknown_attribute_on_a_known_widget_warns(void)
 {
     static const malformed_case_t table[] = {
         {
             "made-up attribute name on lv_label",
             "<component><view extends=\"lv_obj\" name=\"r\">"
             "<lv_label name=\"a\" text=\"Kept\" bogus_attr=\"7\"/></view></component>",
-            true, NULL /* silent */
+            true, "Unknown attribute \"bogus_attr\" on <lv_label>"
         },
         {
             "misspelled real attribute (txet instead of text)",
             "<component><view extends=\"lv_obj\" name=\"r\">"
             "<lv_label name=\"a\" txet=\"typo\"/></view></component>",
-            true, NULL /* silent */
+            true, "Unknown attribute \"txet\" on <lv_label>"
+        },
+        {
+            "typo'd lv_obj attribute, on a widget whose own chain also misses it",
+            "<component><view extends=\"lv_obj\" name=\"r\">"
+            "<lv_label name=\"a\" text=\"Kept\" widht=\"100\"/></view></component>",
+            true, "Unknown attribute \"widht\" on <lv_label>"
+        },
+        {
+            "attribute of a DIFFERENT widget (lv_label's text on an lv_slider)",
+            "<component><view extends=\"lv_obj\" name=\"r\">"
+            "<lv_slider name=\"a\" text=\"nope\"/></view></component>",
+            true, "Unknown attribute \"text\" on <lv_slider>"
+        },
+        {
+            "typo on the component's own <view> root",
+            "<component><view extends=\"lv_obj\" name=\"r\" scrollabel=\"false\">"
+            "<lv_label name=\"a\" text=\"Kept\"/></view></component>",
+            true, "Unknown attribute \"scrollabel\" on <lv_obj>"
         },
     };
     RUN_TABLE(table);
 
-    /* And the surviving attributes on the same element still applied. */
+    /* And the surviving attributes on the same element still applied - the
+     * check reports, it must not change what gets applied. */
     lv_obj_t * screen = helix_test_env_screen();
     lv_xml_component_unregister(SUBJECT_NAME);
     ASSERT_XML_REGISTERS(SUBJECT_NAME,
@@ -575,6 +606,143 @@ static void test_unknown_attribute_on_a_known_widget_is_silently_ignored(void)
     ASSERT_LABEL_TEXT(ASSERT_NAMED(root, "a"), "Kept");
 
     assert_engine_still_works("unknown attribute");
+}
+
+/**
+ * THE ONE THAT MATTERS: a wholly CORRECT document, using the full spread of the
+ * dialect, must produce no unknown-attribute warning at all.
+ *
+ * A warning that fires on correct XML is worse than the silence it replaced,
+ * because it teaches everyone to ignore the log. Every category below reaches
+ * the widget's apply chain by a DIFFERENT route, and each one was capable of
+ * producing a flood on its own:
+ *
+ *   - widget-specific attributes (`text`, `long_mode`, `value`, `options`) -
+ *     unknown to lv_xml_obj_apply(), which runs first on every element
+ *   - shared lv_obj attributes (`width`, `align`, `flex_flow`, `hidden`,
+ *     `clickable`, `checked`) - unknown to every widget chain
+ *   - `style_*`, matched by prefix rather than by name
+ *   - `bind_*` attributes, and the framework's `name`
+ *   - `$prop` values substituted at the instance site
+ *   - out-of-band modifiers (`bind_text-fmt`, `value-animated`) that no
+ *     if/else-if arm ever matches because they are read from inside another
+ *     attribute's branch
+ *   - a widget whose chain is EMPTY (`lv_button`), where lv_obj is the only
+ *     handler there is
+ *
+ * The assertion is on the whole log rather than a row-by-row substring: any hit
+ * anywhere in the document is a false positive.
+ */
+static const char * WIDE_GOOD_XML =
+    "<component>"
+    "  <api><prop name=\"caption\" type=\"string\" default=\"Hi\"/></api>"
+    "  <subjects>"
+    "    <subject name=\"lvl\" type=\"int\" value=\"3\"/>"
+    "    <subject name=\"on\" type=\"int\" value=\"1\"/>"
+    "  </subjects>"
+    "  <view extends=\"lv_obj\" name=\"wide_root\" width=\"200\" height=\"content\""
+    "        flex_flow=\"column\" scrollable=\"false\" style_pad_all=\"4\">"
+    "    <lv_label name=\"lbl\" text=\"$caption\" long_mode=\"wrap\" align=\"center\""
+    "              style_text_align=\"left\" style_pad_left=\"2\" hidden=\"false\"/>"
+    "    <lv_label name=\"bound\" bind_text=\"lvl\" bind_text-fmt=\"%d mm\"/>"
+    "    <lv_slider name=\"sld\" value=\"40\" value-animated=\"true\" min_value=\"0\""
+    "               max_value=\"100\" width=\"120\" clickable=\"true\"/>"
+    "    <lv_bar name=\"bar\" bind_value=\"lvl\" style_bg_opa=\"128\" flex_grow=\"1\"/>"
+    "    <lv_button name=\"btn\" width=\"60\" height=\"30\" checked=\"true\">"
+    "      <bind_flag_if_eq subject=\"on\" flag=\"hidden\" ref_value=\"0\"/>"
+    "    </lv_button>"
+    "    <lv_dropdown name=\"dd\" options=\"a\nb\" selected=\"1\" width=\"80\"/>"
+    "  </view>"
+    "</component>";
+
+static void test_a_correct_document_produces_no_unknown_attribute_warning(void)
+{
+    lv_obj_t * screen = helix_test_env_screen();
+    lv_xml_component_unregister(SUBJECT_NAME);
+
+    log_capture_start();
+    lv_result_t res = lv_xml_register_component_from_data(SUBJECT_NAME, WIDE_GOOD_XML);
+    const char * inst[] = {"caption", "Hello", "name", "instance_root", NULL, NULL};
+    lv_obj_t * root = res == LV_RESULT_OK ? lv_xml_create(screen, SUBJECT_NAME, inst) : NULL;
+    helix_test_pump(20);
+    log_capture_stop();
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(LV_RESULT_OK, (int)res, "the wide-spread document did not register");
+    TEST_ASSERT_NOT_NULL_MESSAGE(root, "the wide-spread document did not build");
+
+    TEST_ASSERT_FALSE_MESSAGE(
+        log_contains("Unknown attribute"),
+        helix_xml_assert_msgf("a CORRECT document produced an unknown-attribute warning - this is "
+                              "the false-positive flood the check exists to avoid; log: %.700s",
+                              g_log_buf));
+
+    /* Prove the document really was applied, so a future refactor cannot make
+     * this test pass by quietly failing to parse anything. */
+    ASSERT_LABEL_TEXT(ASSERT_NAMED(root, "lbl"), "Hello");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(40, lv_slider_get_value(ASSERT_NAMED(root, "sld")),
+                                  "the slider's value attribute was not applied");
+    TEST_ASSERT_TRUE_MESSAGE(lv_obj_has_state(ASSERT_NAMED(root, "btn"), LV_STATE_CHECKED),
+                             "the button's checked attribute was not applied");
+
+    assert_engine_still_works("correct wide-spread document");
+}
+
+/**
+ * A widget registered by the APPLICATION is never checked, however many
+ * attributes it declines to handle.
+ *
+ * Downstream widgets (HelixScreen registers ~30) have apply_cbs this library
+ * cannot see inside. They routinely accept attributes their create_cb consumed,
+ * or ignore some on purpose. Checking them would mean a warning on every one of
+ * those, so registration through lv_xml_register_widget() deliberately opts out
+ * - and it has to keep doing so even though such a widget calls
+ * lv_xml_obj_apply(), which does record misses.
+ */
+static lv_obj_t * g_custom_widget_last;
+
+static void * custom_widget_create(lv_xml_parser_state_t * state, const char ** attrs)
+{
+    LV_UNUSED(attrs);
+    g_custom_widget_last = lv_obj_create(lv_xml_state_get_parent(state));
+    return g_custom_widget_last;
+}
+
+static void custom_widget_apply(lv_xml_parser_state_t * state, const char ** attrs)
+{
+    /* Exactly what a downstream widget does: hand the array to lv_obj and keep
+     * its own attributes to itself. */
+    lv_xml_obj_apply(state, attrs);
+}
+
+static void test_an_application_registered_widget_is_never_reported(void)
+{
+    lv_obj_t * screen = helix_test_env_screen();
+    lv_xml_component_unregister(SUBJECT_NAME);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        LV_RESULT_OK,
+        (int)lv_xml_register_widget("app_widget", custom_widget_create, custom_widget_apply),
+        "the custom widget did not register");
+
+    log_capture_start();
+    lv_result_t res = lv_xml_register_component_from_data(
+                          SUBJECT_NAME,
+                          "<component><view extends=\"lv_obj\" name=\"r\">"
+                          "<app_widget name=\"aw\" width=\"50\" my_own_attr=\"7\" another=\"x\"/>"
+                          "</view></component>");
+    lv_obj_t * root = res == LV_RESULT_OK ? lv_xml_create(screen, SUBJECT_NAME, NULL) : NULL;
+    helix_test_pump(20);
+    log_capture_stop();
+
+    TEST_ASSERT_NOT_NULL_MESSAGE(root, "the document with the custom widget did not build");
+    TEST_ASSERT_NOT_NULL_MESSAGE(lv_obj_find_by_name(root, "aw"),
+                                 "the custom widget was not created, so nothing was checked");
+    TEST_ASSERT_FALSE_MESSAGE(
+        log_contains("Unknown attribute"),
+        helix_xml_assert_msgf("an application-registered widget was reported on - every downstream "
+                              "consumer would drown in this; log: %.500s", g_log_buf));
+
+    assert_engine_still_works("application-registered widget");
 }
 
 /**
@@ -1296,7 +1464,9 @@ int main(void)
     RUN_TEST(test_malformed_attribute_syntax_warns_and_leaves_the_parser_usable);
     RUN_TEST(test_stray_angle_brackets_in_attribute_values);
     RUN_TEST(test_unknown_widget_name_warns_but_keeps_following_siblings_in_place);
-    RUN_TEST(test_unknown_attribute_on_a_known_widget_is_silently_ignored);
+    RUN_TEST(test_unknown_attribute_on_a_known_widget_warns);
+    RUN_TEST(test_a_correct_document_produces_no_unknown_attribute_warning);
+    RUN_TEST(test_an_application_registered_widget_is_never_reported);
     RUN_TEST(test_unknown_enum_value_warns_and_the_widget_is_still_built);
     RUN_TEST(test_contentless_documents_warn_and_leave_the_parser_usable);
     RUN_TEST(test_component_without_a_view_warns_and_leaves_the_parser_usable);

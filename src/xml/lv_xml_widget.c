@@ -59,6 +59,15 @@ lv_result_t lv_xml_register_widget(const char * name, lv_xml_widget_create_cb_t 
     return LV_RESULT_OK;
 }
 
+void lv_xml_widget_mark_all_builtin(void)
+{
+    lv_widget_processor_t * p = widget_processor_head;
+    while(p) {
+        p->builtin = true;
+        p = p->next;
+    }
+}
+
 void lv_xml_widget_deinit(void)
 {
     /* Every node and every node->name came from the heap in

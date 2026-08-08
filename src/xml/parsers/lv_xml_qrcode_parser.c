@@ -53,6 +53,8 @@ void lv_xml_qrcode_apply(lv_xml_parser_state_t * state, const char ** attrs)
     void * item = lv_xml_state_get_item(state);
     lv_xml_obj_apply(state, attrs); /*Apply the common properties, e.g. width, height, styles flags etc*/
 
+    lv_xml_attr_check_enter(state);
+
     for(int i = 0; attrs[i]; i += 2) {
         const char * name  = attrs[i];
         const char * value = attrs[i + 1];
@@ -62,6 +64,7 @@ void lv_xml_qrcode_apply(lv_xml_parser_state_t * state, const char ** attrs)
         else if(lv_streq("light_color", name)) lv_qrcode_set_light_color(item, lv_xml_to_color(value));
         else if(lv_streq("data", name)) lv_qrcode_set_data(item, value);
         else if(lv_streq("quiet_zone", name)) lv_qrcode_set_quiet_zone(item, lv_xml_to_bool(value));
+        else lv_xml_attr_check_miss(state, name);
     }
 }
 

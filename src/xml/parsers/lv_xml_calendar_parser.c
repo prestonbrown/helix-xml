@@ -55,6 +55,8 @@ void lv_xml_calendar_apply(lv_xml_parser_state_t * state, const char ** attrs)
 
     lv_xml_obj_apply(state, attrs); /*Apply the common properties, e.g. width, height, styles flags etc*/
 
+    lv_xml_attr_check_enter(state);
+
     for(int i = 0; attrs[i]; i += 2) {
         const char * name = attrs[i];
         const char * value = attrs[i + 1];
@@ -64,6 +66,7 @@ void lv_xml_calendar_apply(lv_xml_parser_state_t * state, const char ** attrs)
         else if(lv_streq("today_day", name)) lv_calendar_set_today_day(item, lv_xml_atoi(value));
         else if(lv_streq("shown_year", name)) lv_calendar_set_shown_year(item, lv_xml_atoi(value));
         else if(lv_streq("shown_month", name)) lv_calendar_set_shown_month(item, lv_xml_atoi(value));
+        else lv_xml_attr_check_miss(state, name);
     }
 }
 

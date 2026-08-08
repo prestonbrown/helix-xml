@@ -54,6 +54,8 @@ void lv_xml_buttonmatrix_apply(lv_xml_parser_state_t * state, const char ** attr
     void * item = lv_xml_state_get_item(state);
     lv_xml_obj_apply(state, attrs); /*Apply the common properties, e.g. width, height, styles flags etc*/
 
+    lv_xml_attr_check_enter(state);
+
     for(int i = 0; attrs[i]; i += 2) {
         const char * name = attrs[i];
         const char * value = attrs[i + 1];
@@ -129,6 +131,7 @@ void lv_xml_buttonmatrix_apply(lv_xml_parser_state_t * state, const char ** attr
         }
         else if(lv_streq("selected_button", name)) lv_buttonmatrix_set_selected_button(item, lv_xml_atoi(value));
         else if(lv_streq("one_checked", name)) lv_buttonmatrix_set_one_checked(item, lv_xml_to_bool(value));
+        else lv_xml_attr_check_miss(state, name);
     }
 }
 

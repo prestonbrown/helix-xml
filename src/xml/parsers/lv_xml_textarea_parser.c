@@ -54,6 +54,8 @@ void lv_xml_textarea_apply(lv_xml_parser_state_t * state, const char ** attrs)
 
     lv_xml_obj_apply(state, attrs); /*Apply the common properties, e.g. width, height, styles flags etc*/
 
+    lv_xml_attr_check_enter(state);
+
     for(int i = 0; attrs[i]; i += 2) {
         const char * name = attrs[i];
         const char * value = attrs[i + 1];
@@ -73,6 +75,7 @@ void lv_xml_textarea_apply(lv_xml_parser_state_t * state, const char ** attrs)
         else if(lv_streq("password_show_time", name)) lv_textarea_set_password_show_time(item, lv_xml_atoi(value));
         else if(lv_streq("text_selection", name)) lv_textarea_set_text_selection(item, lv_xml_to_bool(value));
         else if(lv_streq("cursor_pos", name)) lv_textarea_set_cursor_pos(item, lv_xml_atoi(value));
+        else lv_xml_attr_check_miss(state, name);
     }
 }
 

@@ -302,6 +302,12 @@ void lv_xml_init(void)
     lv_xml_register_widget("lv_obj-bind_state_if_ge", lv_obj_xml_bind_state_create, lv_obj_xml_bind_state_apply);
     lv_xml_register_widget("lv_obj-bind_state_if_le", lv_obj_xml_bind_state_create, lv_obj_xml_bind_state_apply);
 
+    /* Everything registered above is ours, and only ours reports its unknown
+     * attributes. Anything an application registers afterwards stays unmarked
+     * and is never checked - see lv_xml_attr_check.h. Must stay LAST in the
+     * registration block. */
+    lv_xml_widget_mark_all_builtin();
+
     lv_xml_load_init();
 }
 
@@ -437,7 +443,9 @@ void * lv_xml_create(lv_obj_t * parent, const char * name, const char ** attrs)
             return NULL;
         }
         if(attrs) {
+            if(p->builtin) lv_xml_attr_check_begin(&state, attrs, name);
             p->apply_cb(&state, attrs);
+            lv_xml_attr_check_end(&state);
         }
         return state.item;
     }
@@ -2277,7 +2285,9 @@ static void view_start_element_handler(void * user_data, const char * name, cons
             if(state->scope.is_widget && is_view) lv_obj_remove_style_all(state->item);
 
             /*Apply the attributes from e.g. `<lv_slider value="30" x="20">`*/
+            if(p->builtin) lv_xml_attr_check_begin(state, attrs, name);
             p->apply_cb(state, attrs);
+            lv_xml_attr_check_end(state);
         }
     }
 

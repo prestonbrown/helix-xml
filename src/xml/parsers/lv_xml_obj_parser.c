@@ -87,6 +87,8 @@ void lv_xml_obj_apply(lv_xml_parser_state_t * state, const char ** attrs)
 {
     void * item = lv_xml_state_get_item(state);
 
+    lv_xml_attr_check_enter(state);
+
     for(int i = 0; attrs[i]; i += 2) {
         const char * name = attrs[i];
         const char * value = attrs[i + 1];
@@ -219,6 +221,10 @@ void lv_xml_obj_apply(lv_xml_parser_state_t * state, const char ** attrs)
         else if(name_len > 6 && lv_memcmp("style_", name, 6) == 0) {
             apply_styles(state, item, name, value);
         }
+        /* Not one of lv_obj's own. Recorded, not warned: the widget-specific
+         * chain that called this one gets its turn next, and only an attribute
+         * that EVERY chain missed is a typo. */
+        else lv_xml_attr_check_miss(state, name);
     }
 }
 

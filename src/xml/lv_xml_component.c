@@ -67,6 +67,7 @@ static void component_scope_free(lv_xml_component_scope_t * scope);
 static void component_scope_drop_others(const char * name, const lv_xml_component_scope_t * keep);
 static void scope_instance_delete_cb(lv_event_t * e);
 static void scope_free_async_cb(void * scope_v);
+static void subject_expr_record_release(lv_xml_subject_expr_t * record);
 
 /**********************
  *  STATIC VARIABLES
@@ -426,7 +427,22 @@ void lv_xml_subject_record_release(lv_xml_subject_t * s)
     if(s == NULL) return;
 
     lv_free((char *)s->name);
-    if(!s->owned) return;
+    lv_xml_subject_record_release_storage(s);
+}
+
+/**
+ * The storage half of the rule above, split out for register_subject_impl():
+ * re-registering a name keeps the record and its name copy and replaces only
+ * the subject, so it needs the ownership walk WITHOUT the name free. The
+ * distinction, the deinit-before-free ordering and the string buffers all live
+ * here so there is exactly one copy of them.
+ *
+ * Leaves `s->subject` dangling - every caller either frees the record straight
+ * after or overwrites the pointer.
+ */
+void lv_xml_subject_record_release_storage(lv_xml_subject_t * s)
+{
+    if(s == NULL || !s->owned || s->subject == NULL) return;
 
     lv_subject_deinit(s->subject);
     if(s->subject->type == LV_SUBJECT_TYPE_STRING) {
@@ -683,12 +699,7 @@ static void component_scope_free(lv_xml_component_scope_t * scope)
      * and is freed there, not here. */
     lv_xml_subject_expr_t * subject_expr;
     LV_LL_READ(&scope->subject_expr_ll, subject_expr) {
-        for(uint32_t i = 0; i < subject_expr->observer_count; i++) {
-            if(subject_expr->observers[i]) lv_observer_remove(subject_expr->observers[i]);
-        }
-        lv_free(subject_expr->observers);
-        lv_xml_expr_free(subject_expr->expr);
-        lv_free(subject_expr->ctx);
+        subject_expr_record_release(subject_expr);
     }
     lv_ll_clear(&scope->subject_expr_ll);
 
@@ -941,6 +952,42 @@ static void subject_expr_observer_cb(lv_observer_t * obs, lv_subject_t * s)
     LV_UNUSED(s);
     subject_expr_ctx_t * c = (subject_expr_ctx_t *)lv_observer_get_user_data(obs);
     lv_subject_set_int(c->derived, lv_xml_expr_eval(c->expr));
+}
+
+/**
+ * Everything one `<subject_expr>` record owns, minus the derived lv_subject_t
+ * (that one lives in `subjects_ll` and is released there). Detaching the
+ * observers FIRST is the whole point: they sit on input subjects that may be
+ * still-live globals, and every one of them shares `ctx`, so freeing `ctx`
+ * while any is attached is a use-after-free the next time that input changes.
+ * Does NOT unlink the record - the caller lv_ll_clear()s or lv_ll_remove()s it.
+ */
+static void subject_expr_record_release(lv_xml_subject_expr_t * record)
+{
+    if(record == NULL) return;
+
+    for(uint32_t i = 0; i < record->observer_count; i++) {
+        if(record->observers[i]) lv_observer_remove(record->observers[i]);
+    }
+    lv_free(record->observers);
+    lv_xml_expr_free(record->expr);
+    lv_free(record->ctx);
+}
+
+void lv_xml_subject_expr_drop_for_subject(lv_xml_component_scope_t * scope, const lv_subject_t * derived)
+{
+    if(scope == NULL || derived == NULL) return;
+
+    lv_xml_subject_expr_t * record;
+    LV_LL_READ(&scope->subject_expr_ll, record) {
+        const subject_expr_ctx_t * ctx = (const subject_expr_ctx_t *)record->ctx;
+        if(ctx == NULL || ctx->derived != derived) continue;
+
+        subject_expr_record_release(record);
+        lv_ll_remove(&scope->subject_expr_ll, record);
+        lv_free(record);
+        return;
+    }
 }
 
 /**

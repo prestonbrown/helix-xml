@@ -38,6 +38,16 @@
  * removes ONE record by name; freeing unconditionally there aborts on
  * application storage, freeing nothing leaks every parser-allocated subject
  * removed by name.
+ *
+ * And so does register_subject_impl(), the third and least obvious place: a
+ * record whose name is registered over keeps the record and swaps the subject,
+ * so whatever it was holding has to be released right there. It was not, which
+ * is a plain leak (LeakSanitizer, once the sanitize job could see LVGL's
+ * allocations under LV_STDLIB_CLIB) - but releasing it naively is worse than the
+ * leak on the two provenances where something else is still pointing at the
+ * subject: a borrowed one belongs to the caller, and a `<subject_expr>` derived
+ * one has observers on its INPUT subjects writing into it through a shared
+ * context. Both are covered below.
  * ---------------------------------------------------------------------------
  *
  * HOW THESE TESTS ASSERT, given that the interesting failures are memory
@@ -74,6 +84,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
 
@@ -191,6 +202,36 @@ static size_t heap_free_size(void)
 #define ASSERT_OBSERVER_COUNT(subject, n, why)                                           \
     TEST_ASSERT_EQUAL_UINT32_MESSAGE((uint32_t)(n), subject_observer_count(subject), (why))
 
+/** Is @p subject still reachable from any record in @p scope's own list?
+ *
+ * The complement of the pointer identity check: after a re-registration the NEW
+ * subject must be what the name resolves to, and the OLD one must not be hiding
+ * in the list under some other name. */
+static bool scope_holds_subject(lv_xml_component_scope_t * scope, const lv_subject_t * subject)
+{
+    lv_xml_subject_t * s;
+    LV_LL_READ(&scope->subjects_ll, s) {
+        if(s->subject == subject) return true;
+    }
+    return false;
+}
+
+/* lv_mem_monitor() only reports anything under the BUILTIN allocator; an
+ * LV_STDLIB_CLIB build (what the ASAN job needs, so the sanitizer can see LVGL's
+ * allocations at all) answers zero to everything. Gate the byte-exact accounting
+ * so the BEHAVIOURAL assertions beside it still run under both - under CLIB it is
+ * LeakSanitizer, not this macro, that adjudicates the release. Same gate as
+ * test_component.c. The cycle-equality assertions elsewhere in this file
+ * self-skip for free (0 == 0) and are left ungated. */
+#if LV_USE_STDLIB_MALLOC == LV_STDLIB_BUILTIN
+    #define ASSERT_HEAP(cond, msg) TEST_ASSERT_TRUE_MESSAGE((cond), (msg))
+#else
+    /* `cond` is still evaluated-and-discarded rather than dropped outright: the
+     * free_size locals it reads are otherwise unused in this build and every one
+     * of them would warn. */
+    #define ASSERT_HEAP(cond, msg) do { (void)(cond); (void)(msg); } while(0)
+#endif
+
 /*---------------------------------------------------------------------------
  * Fixtures
  *--------------------------------------------------------------------------*/
@@ -214,6 +255,18 @@ static const char * OWNED_SUBJECTS_XML =
     "  <view extends=\"lv_obj\" name=\"owned_root\">"
     "    <lv_obj name=\"box\"/>"
     "  </view>"
+    "</component>";
+
+/* The other parser-allocated provenance: a <subject_expr> derived subject. The
+ * lv_subject_t is owned by subjects_ll exactly like a <subject>, but observers
+ * on `src` write into it through a context that outlives the record. */
+static const char * OWNED_EXPR_XML =
+    "<component>"
+    "  <subjects>"
+    "    <subject name=\"src\" type=\"int\" value=\"1\"/>"
+    "    <subject_expr name=\"derived\" expr=\"src gt 0\"/>"
+    "  </subjects>"
+    "  <view extends=\"lv_obj\" name=\"expr_root\"/>"
     "</component>";
 
 /* A view that BINDS to a subject by name, so an observer really lands on it.
@@ -281,39 +334,60 @@ static void test_the_parser_records_its_own_subjects_as_owned_and_the_public_api
 }
 
 /**
- * PINS CURRENT BEHAVIOUR - suspected bug: re-registering an OWNED name through
- * the public lv_xml_register_subject() overwrites both the pointer and the
- * `owned` flag in place (register_subject_impl in lv_xml.c), and never releases
- * the lv_subject_t the scope was holding. The documented intent is "whoever
- * registered last is the authority on who owns the storage now", which is right
- * for the pointer; the parser-allocated subject that was there is simply
- * dropped on the floor, so for a `<subject type="string">` that leaks the
- * lv_subject_t plus its two 256-byte buffers.
+ * Re-registering an OWNED name through the public lv_xml_register_subject()
+ * hands provenance to the caller - and must RELEASE the lv_subject_t the scope
+ * was holding on the way, because that record was its only owner.
  *
- * Not reachable from XML - it needs application code to register over a name a
- * component declared - but that is exactly what a C++ owner re-binding a name
- * after a hot reload does. Asserted as the flag flip only; the leak itself is
- * deliberately NOT asserted, because a test that demands the leak would have to
- * be rewritten the day it is fixed.
+ * register_subject_impl() (lv_xml.c) updates an existing record in place:
+ * "whoever registered last is the authority on who owns the storage now". That
+ * is right for the pointer, but it used to drop the parser-allocated subject on
+ * the floor - 72 bytes for the int path, and for a `<subject type="string">`
+ * the lv_subject_t plus its two 256-byte buffers. LeakSanitizer caught it once
+ * the sanitize job moved to LV_STDLIB_CLIB and could see LVGL's allocations at
+ * all. Not reachable from XML - it needs application code to register over a
+ * name a component declared - but that is exactly what a C++ owner re-binding a
+ * name after a hot reload does.
+ *
+ * Three separate observations, because none of them alone is the whole claim:
+ *   - the flag flips owned -> borrowed, so teardown now leaves the CALLER's
+ *     storage alone (freeing this file-static address would abort outright);
+ *   - the name resolves to the NEW subject and the old pointer is not reachable
+ *     from the scope under any name - gone, not orphaned in the list;
+ *   - the heap actually grew across the call. Without this a release that
+ *     unlinked the record but never called lv_free would pass the other two.
  */
-static void test_re_registering_an_owned_name_through_the_public_api_makes_it_borrowed(void)
+static void test_re_registering_an_owned_name_releases_the_subject_the_scope_held(void)
 {
     ASSERT_XML_REGISTERS("prov_reclaim", OWNED_SUBJECTS_XML);
     lv_xml_component_scope_t * scope = lv_xml_component_get_scope("prov_reclaim");
     TEST_ASSERT_NOT_NULL(scope);
     ASSERT_OWNED(scope, "owned_int");
 
+    lv_subject_t * displaced = lv_xml_get_subject(scope, "owned_int");
+    TEST_ASSERT_NOT_NULL(displaced);
+    TEST_ASSERT_TRUE(scope_holds_subject(scope, displaced));
+
     lv_subject_init_int(&s_other, 123);
+    size_t before = heap_free_size();
     TEST_ASSERT_EQUAL_INT(LV_RESULT_OK,
                           (int)lv_xml_register_subject(scope, "owned_int", &s_other));
+    size_t after = heap_free_size();
 
     ASSERT_BORROWED(scope, "owned_int");
     TEST_ASSERT_EQUAL_PTR_MESSAGE(&s_other, lv_xml_get_subject(scope, "owned_int"),
                                   "the second registration of the name must win");
 
+    /* Gone, not merely orphaned: nothing in the scope still points at it. The
+     * pointer is dangling from here on and is never dereferenced again. */
+    TEST_ASSERT_FALSE_MESSAGE(scope_holds_subject(scope, displaced),
+                              "the displaced subject is still reachable from the scope");
+
+    ASSERT_HEAP(after >= before + sizeof(lv_subject_t),
+                "re-registering over an OWNED name did not return the displaced lv_subject_t "
+                "to the heap - the record was overwritten in place and its subject leaked");
+
     /* The consequence that matters: teardown must now leave the caller's
-     * storage alone, even though the name arrived from XML. Freeing this
-     * file-static address would abort outright. */
+     * storage alone, even though the name arrived from XML. */
     observer_probe_t probe = {0, 0};
     TEST_ASSERT_NOT_NULL(lv_subject_add_observer(&s_other, probe_cb, &probe));
 
@@ -325,6 +399,208 @@ static void test_re_registering_an_owned_name_through_the_public_api_makes_it_bo
     TEST_ASSERT_EQUAL_INT32(124, probe.last_value);
 
     lv_subject_deinit(&s_other);
+}
+
+/**
+ * The same release, on the type that costs the most: `<subject type="string">`
+ * is an lv_subject_t plus two 256-byte buffers, and only the ownership walk in
+ * lv_xml_subject_record_release() frees the buffers. A release that freed the
+ * lv_subject_t and forgot them would fix 72 bytes and leave 512 behind, which
+ * the int case above cannot tell apart from a complete one.
+ *
+ * The threshold is deliberately the buffers alone (2 * 256), not
+ * 2 * 256 + sizeof(lv_subject_t): the point is to fail a subject-only free.
+ */
+static void test_re_registering_an_owned_string_name_releases_its_buffers(void)
+{
+    ASSERT_XML_REGISTERS("prov_reclaim_str", OWNED_SUBJECTS_XML);
+    lv_xml_component_scope_t * scope = lv_xml_component_get_scope("prov_reclaim_str");
+    TEST_ASSERT_NOT_NULL(scope);
+    ASSERT_OWNED(scope, "owned_str");
+
+    lv_subject_t * displaced = lv_xml_get_subject(scope, "owned_str");
+    TEST_ASSERT_NOT_NULL(displaced);
+    TEST_ASSERT_EQUAL_STRING("hello", lv_subject_get_string(displaced));
+
+    lv_subject_init_int(&s_other, 55);
+    size_t before = heap_free_size();
+    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK,
+                          (int)lv_xml_register_subject(scope, "owned_str", &s_other));
+    size_t after = heap_free_size();
+
+    ASSERT_BORROWED(scope, "owned_str");
+    TEST_ASSERT_EQUAL_PTR(&s_other, lv_xml_get_subject(scope, "owned_str"));
+    TEST_ASSERT_FALSE_MESSAGE(scope_holds_subject(scope, displaced),
+                              "the displaced string subject is still reachable from the scope");
+
+    ASSERT_HEAP(after >= before + 2 * 256,
+                "re-registering over an OWNED string subject freed less than its two 256-byte "
+                "buffers - the lv_subject_t went back but its value/prev_value did not");
+
+    /* The other <subject> in the same scope is untouched by the swap. */
+    ASSERT_OWNED(scope, "owned_int");
+    TEST_ASSERT_EQUAL_INT32(7, lv_subject_get_int(lv_xml_get_subject(scope, "owned_int")));
+
+    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_component_unregister("prov_reclaim_str"));
+    lv_subject_deinit(&s_other);
+}
+
+/**
+ * Steady state, which is what a hot reloader that re-binds its names on every
+ * file save actually does. Both parser-allocated types are displaced every
+ * cycle, so a leak on either path shows up as free_size falling monotonically
+ * rather than as a single delta that could be blamed on allocator bookkeeping.
+ * Cycle 0 is a warm-up and discarded (same note as the tests below).
+ */
+static void test_re_registering_over_owned_names_returns_the_heap_every_cycle(void)
+{
+    size_t after_cycle[5];
+    int i;
+
+    for(i = 0; i < 5; i++) {
+        ASSERT_XML_REGISTERS("reclaim_cycle", OWNED_SUBJECTS_XML);
+        lv_xml_component_scope_t * scope = lv_xml_component_get_scope("reclaim_cycle");
+        TEST_ASSERT_NOT_NULL(scope);
+        ASSERT_OWNED(scope, "owned_int");
+        ASSERT_OWNED(scope, "owned_str");
+
+        /* Re-init every cycle: lv_subject_init_* resets subs_ll, and nothing
+         * observes these inside the loop, so no observer is ever orphaned. */
+        lv_subject_init_int(&s_other, 1);
+        lv_subject_init_int(&s_shared, 2);
+        TEST_ASSERT_EQUAL_INT(LV_RESULT_OK,
+                              (int)lv_xml_register_subject(scope, "owned_int", &s_other));
+        TEST_ASSERT_EQUAL_INT(LV_RESULT_OK,
+                              (int)lv_xml_register_subject(scope, "owned_str", &s_shared));
+        ASSERT_BORROWED(scope, "owned_int");
+        ASSERT_BORROWED(scope, "owned_str");
+
+        /* Teardown must now release nothing at all: both records are borrowed. */
+        TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_component_unregister("reclaim_cycle"));
+        TEST_ASSERT_NULL(lv_xml_component_get_scope("reclaim_cycle"));
+
+        /* Still the caller's, still usable - a release that freed the caller's
+         * storage instead of the displaced one would abort before this. */
+        TEST_ASSERT_EQUAL_INT32(1, lv_subject_get_int(&s_other));
+        TEST_ASSERT_EQUAL_INT32(2, lv_subject_get_int(&s_shared));
+
+        after_cycle[i] = heap_free_size();
+    }
+
+    lv_subject_deinit(&s_other);
+    lv_subject_deinit(&s_shared);
+
+    for(i = 2; i < 5; i++) {
+        TEST_ASSERT_EQUAL_size_t_MESSAGE(
+            after_cycle[1], after_cycle[i],
+            helix_xml_assert_msgf(
+                "cycle %d did not return the heap to where cycle 1 left it - re-registering over "
+                "a name the parser OWNS is leaking the subject it displaces", i));
+    }
+}
+
+/**
+ * The one owned provenance where releasing the subject is not enough on its own.
+ *
+ * A `<subject_expr>` derived subject is owned by subjects_ll like any other, but
+ * the observers that write into it hang off its INPUT subjects and share a
+ * context holding the derived pointer. Free the subject and leave them attached
+ * and the next write to `src` calls lv_subject_set_int() on reclaimed memory -
+ * the release would have traded a leak for a use-after-free, which is strictly
+ * worse. So the re-registration drops the whole subject_expr record first.
+ *
+ * Asserted as the observer count on the INPUT subject, which is exact and does
+ * not depend on what the allocator does with the freed block: 1 while the
+ * expression is live, 0 once the name it feeds has been re-registered.
+ */
+static void test_re_registering_over_a_subject_expr_detaches_its_input_observers(void)
+{
+    ASSERT_XML_REGISTERS("prov_expr", OWNED_EXPR_XML);
+    lv_xml_component_scope_t * scope = lv_xml_component_get_scope("prov_expr");
+    TEST_ASSERT_NOT_NULL(scope);
+    ASSERT_OWNED(scope, "derived");
+
+    lv_subject_t * src = lv_xml_get_subject(scope, "src");
+    lv_subject_t * derived = lv_xml_get_subject(scope, "derived");
+    TEST_ASSERT_NOT_NULL(src);
+    TEST_ASSERT_NOT_NULL(derived);
+    TEST_ASSERT_EQUAL_INT32_MESSAGE(1, lv_subject_get_int(derived),
+                                    "the derived subject was not seeded from its expression");
+    ASSERT_OBSERVER_COUNT(src, 1, "<subject_expr> did not observe its input");
+
+    /* The expression is live: driving the input moves the derived value. */
+    lv_subject_set_int(src, 0);
+    TEST_ASSERT_EQUAL_INT32(0, lv_subject_get_int(derived));
+
+    lv_subject_init_int(&s_other, 77);
+    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK,
+                          (int)lv_xml_register_subject(scope, "derived", &s_other));
+    ASSERT_BORROWED(scope, "derived");
+    TEST_ASSERT_FALSE(scope_holds_subject(scope, derived));
+
+    ASSERT_OBSERVER_COUNT(src, 0,
+                          "re-registering over a <subject_expr> name freed the derived subject but "
+                          "left the expression's observers on its input - the next write to `src` "
+                          "would set a value on reclaimed memory");
+
+    /* And the input really is inert now: writing it touches nothing that was
+     * released, and does not reach the caller's replacement either. */
+    lv_subject_set_int(src, 1);
+    TEST_ASSERT_EQUAL_INT32_MESSAGE(77, lv_subject_get_int(&s_other),
+                                    "the dropped expression wrote into the replacement subject");
+
+    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_component_unregister("prov_expr"));
+    TEST_ASSERT_EQUAL_INT32(77, lv_subject_get_int(&s_other));
+    lv_subject_deinit(&s_other);
+}
+
+/**
+ * The degenerate re-registration: the SAME pointer registered over itself,
+ * changing only the provenance. A release keyed on the `owned` flag alone would
+ * free the subject and then store the pointer it just freed straight back into
+ * the record - a use-after-free on the very next lookup, and a double free at
+ * teardown. So the release has to be keyed on the pointer CHANGING as well.
+ *
+ * The reachable shape of this is an application that looks a name up with
+ * lv_xml_get_subject() and re-registers what it got back, which is what
+ * "adopt whatever the XML declared" code does.
+ *
+ * Ownership really does transfer, so this test frees the subject itself at the
+ * end - exactly what the application taking it over would have to do.
+ */
+static void test_re_registering_the_same_pointer_over_itself_does_not_free_it(void)
+{
+    ASSERT_XML_REGISTERS("prov_self", OWNED_SUBJECTS_XML);
+    lv_xml_component_scope_t * scope = lv_xml_component_get_scope("prov_self");
+    TEST_ASSERT_NOT_NULL(scope);
+    ASSERT_OWNED(scope, "owned_int");
+
+    lv_subject_t * same = lv_xml_get_subject(scope, "owned_int");
+    TEST_ASSERT_NOT_NULL(same);
+
+    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK,
+                          (int)lv_xml_register_subject(scope, "owned_int", same));
+    ASSERT_BORROWED(scope, "owned_int");
+    TEST_ASSERT_EQUAL_PTR(same, lv_xml_get_subject(scope, "owned_int"));
+
+    /* Alive, not freed-then-stored: the declared value is still readable and the
+     * subject still drives an observer. */
+    TEST_ASSERT_EQUAL_INT32_MESSAGE(7, lv_subject_get_int(same),
+                                    "registering a subject over itself freed it");
+    observer_probe_t probe = {0, 0};
+    TEST_ASSERT_NOT_NULL(lv_subject_add_observer(same, probe_cb, &probe));
+    lv_subject_set_int(same, 8);
+    TEST_ASSERT_EQUAL_UINT32(2, probe.fired);
+    TEST_ASSERT_EQUAL_INT32(8, probe.last_value);
+
+    /* Teardown must not free it either - the record says borrowed now. */
+    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_component_unregister("prov_self"));
+    ASSERT_OBSERVER_COUNT(same, 1, "teardown deinit'd a subject the record calls borrowed");
+    lv_subject_set_int(same, 9);
+    TEST_ASSERT_EQUAL_UINT32(3, probe.fired);
+
+    lv_subject_deinit(same);
+    lv_free(same);
 }
 
 /*===========================================================================
@@ -928,7 +1204,11 @@ int main(void)
     UNITY_BEGIN();
 
     RUN_TEST(test_the_parser_records_its_own_subjects_as_owned_and_the_public_api_as_borrowed);
-    RUN_TEST(test_re_registering_an_owned_name_through_the_public_api_makes_it_borrowed);
+    RUN_TEST(test_re_registering_an_owned_name_releases_the_subject_the_scope_held);
+    RUN_TEST(test_re_registering_an_owned_string_name_releases_its_buffers);
+    RUN_TEST(test_re_registering_over_owned_names_returns_the_heap_every_cycle);
+    RUN_TEST(test_re_registering_over_a_subject_expr_detaches_its_input_observers);
+    RUN_TEST(test_re_registering_the_same_pointer_over_itself_does_not_free_it);
 
     RUN_TEST(test_scope_teardown_does_not_free_a_borrowed_subject);
     RUN_TEST(test_scope_teardown_leaves_another_components_observers_attached);

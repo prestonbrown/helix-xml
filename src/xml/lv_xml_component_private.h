@@ -247,6 +247,32 @@ lv_result_t lv_xml_register_subject_owned(lv_xml_component_scope_t * scope, cons
  */
 void lv_xml_subject_record_release(lv_xml_subject_t * s);
 
+/**
+ * Release only the `lv_subject_t` a `subjects_ll` record owns, keeping the
+ * record and its name copy. For re-registration, which replaces the subject
+ * under an existing name. No-op for a borrowed record -- see the comment on
+ * lv_xml_subject_record_release()'s definition for why that is not optional.
+ * Leaves `s->subject` dangling; the caller must overwrite or drop it.
+ * @param s   the record; NULL is a no-op
+ */
+void lv_xml_subject_record_release_storage(lv_xml_subject_t * s);
+
+/**
+ * Tear down the `subject_expr_ll` record whose derived subject is @p derived,
+ * if there is one: detach its observers from their input subjects, free the
+ * expression and the shared observer context, and unlink the record. No-op when
+ * @p derived did not come from a `<subject_expr>`.
+ *
+ * Needed before releasing an owned subject OUTSIDE scope teardown -- a
+ * re-registration of the same name. The derived lv_subject_t lives in
+ * `subjects_ll`, but the observers that write into it live here, and they would
+ * keep firing into the freed subject. Scope teardown does not need it: it drains
+ * `subject_expr_ll` in full, in the right order, on its own.
+ * @param scope     the scope holding the record; NULL is a no-op
+ * @param derived   the derived subject to match; NULL is a no-op
+ */
+void lv_xml_subject_expr_drop_for_subject(lv_xml_component_scope_t * scope, const lv_subject_t * derived);
+
 /**********************
  *      MACROS
  **********************/

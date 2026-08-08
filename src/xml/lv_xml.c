@@ -698,7 +698,29 @@ static lv_result_t register_subject_impl(lv_xml_component_scope_t * scope, const
             /* Update the pointer — the subject may have moved after a
              * destroy/recreate cycle (e.g., soft restart). Provenance follows
              * the new pointer: whoever registered last is the authority on who
-             * owns the storage now. */
+             * owns the storage now.
+             *
+             * This record was the only owner of what it is about to stop
+             * pointing at, so a plain overwrite leaked it: 72 bytes for an int
+             * <subject>, plus two 256-byte buffers for a string one. Release it
+             * through the shared ownership walk, which no-ops on a BORROWED
+             * record (that storage is the caller's - freeing a C++ static here
+             * is a heap abort) and deinits before freeing an owned one, so no
+             * widget is left holding an observer on a reclaimed subject.
+             *
+             * Guarded on the pointer actually changing: registering a subject
+             * over itself - what "adopt whatever the XML declared" code does
+             * after an lv_xml_get_subject() - would otherwise free it and store
+             * the freed pointer straight back. */
+            if(s->subject != subject) {
+                /* A <subject_expr> derived subject additionally has observers on
+                 * its INPUT subjects, all sharing one context that points back
+                 * at what we are about to free. They must come off first or the
+                 * next input change writes into a reclaimed subject. No-op for
+                 * anything that did not come from a <subject_expr>. */
+                if(s->owned) lv_xml_subject_expr_drop_for_subject(scope, s->subject);
+                lv_xml_subject_record_release_storage(s);
+            }
             s->subject = subject;
             s->owned = owned;
             return LV_RESULT_OK;

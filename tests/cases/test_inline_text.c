@@ -420,10 +420,11 @@ static void test_an_unknown_const_in_inline_text_applies_nothing(void)
 
 #if LV_USE_TRANSLATION
 
-/** en/de/fr, one tag, all three complete. */
+/** en/de/fr, all complete. `cat` exists only for the two-tag checkbox cases. */
 static const char * INLINE_PACK =
     "<translations languages=\"en de fr\">"
     "  <translation tag=\"dog\" en=\"Dog\" de=\"Hund\" fr=\"Chien\"/>"
+    "  <translation tag=\"cat\" en=\"Cat\" de=\"Katze\" fr=\"Chat\"/>"
     "</translations>";
 
 static void register_inline_pack(void)
@@ -497,6 +498,203 @@ static void test_the_collapsed_text_is_what_becomes_the_translation_key(void)
     ASSERT_LABEL_TEXT(ASSERT_NAMED(root, "msg"), "Hund");
 }
 
+/*===========================================================================
+ * translation_tag= on <lv_checkbox>
+ *
+ * A checkbox carries a user-visible string in exactly the sense a label does,
+ * but lv_checkbox has no translation_tag field and no
+ * LV_EVENT_TRANSLATION_LANGUAGE_CHANGED arm of its own - it stores a bare
+ * `char * txt`. The parser therefore owns the tag on an event descriptor and
+ * re-resolves from the same tree-wide event lv_translation_set_language() sends.
+ *
+ * Every case below is written against lv_label as the reference: the checkbox
+ * must not merely "work", it must agree with a label given the same attributes.
+ *==========================================================================*/
+
+/** Assert @p obj is a checkbox whose text equals @p s. */
+#define ASSERT_CHECKBOX_TEXT(obj, s)                                                     \
+    do {                                                                                 \
+        lv_obj_t * hx_cb_ = (lv_obj_t *)(obj);                                           \
+        TEST_ASSERT_NOT_NULL_MESSAGE(hx_cb_, "ASSERT_CHECKBOX_TEXT on a NULL object");   \
+        TEST_ASSERT_TRUE_MESSAGE(lv_obj_check_type(hx_cb_, &lv_checkbox_class),          \
+                                 "object is not a checkbox, so it has no checkbox text");\
+        TEST_ASSERT_EQUAL_STRING_MESSAGE((s), lv_checkbox_get_text(hx_cb_),              \
+                                         "wrong text on the checkbox");                  \
+    } while(0)
+
+/** The bug this fixes: the tag was parsed and dropped, so the label read "dog". */
+static void test_a_translation_tag_on_a_checkbox_resolves_to_the_translated_string(void)
+{
+    register_inline_pack();
+    lv_translation_set_language("de");
+
+    lv_obj_t * root = BUILD("cb_i18n",
+                            COMPONENT("<lv_checkbox name=\"opt\" translation_tag=\"dog\"/>"));
+
+    ASSERT_CHECKBOX_TEXT(ASSERT_NAMED(root, "opt"), "Hund");
+}
+
+/**
+ * The half a parse-time lv_tr() would silently fail: the tag has to be STORED,
+ * so a language switch under a built tree updates the checkbox in place. The
+ * label in the same component is the control - if only the label moves, the
+ * checkbox never joined the language-changed broadcast.
+ */
+static void test_a_checkbox_translation_tag_re_resolves_on_a_language_change(void)
+{
+    register_inline_pack();
+    lv_translation_set_language("en");
+
+    lv_obj_t * root = BUILD("cb_i18n_switch",
+                            COMPONENT("<lv_checkbox name=\"opt\" translation_tag=\"dog\"/>"
+                                      "<lv_label name=\"ref\" translation_tag=\"dog\"/>"));
+    lv_obj_t * opt = ASSERT_NAMED(root, "opt");
+    lv_obj_t * ref = ASSERT_NAMED(root, "ref");
+    ASSERT_CHECKBOX_TEXT(opt, "Dog");
+
+    lv_translation_set_language("de");
+    helix_test_pump(30);
+    ASSERT_LABEL_TEXT(ref, "Hund");
+    ASSERT_CHECKBOX_TEXT(opt, "Hund");
+
+    lv_translation_set_language("fr");
+    helix_test_pump(30);
+    ASSERT_CHECKBOX_TEXT(opt, "Chien");
+
+    /* Back again, so this cannot pass by resolving to whatever was set last. */
+    lv_translation_set_language("en");
+    helix_test_pump(30);
+    ASSERT_LABEL_TEXT(ref, "Dog");
+    ASSERT_CHECKBOX_TEXT(opt, "Dog");
+}
+
+/** An undeclared tag falls back to the tag string - the same as a label's. */
+static void test_an_unknown_translation_tag_on_a_checkbox_shows_the_tag(void)
+{
+    register_inline_pack();
+    lv_translation_set_language("de");
+
+    lv_obj_t * root = BUILD("cb_i18n_unknown",
+                            COMPONENT("<lv_checkbox name=\"opt\" translation_tag=\"no_such_tag\"/>"
+                                      "<lv_label name=\"ref\" translation_tag=\"no_such_tag\"/>"));
+
+    ASSERT_LABEL_TEXT(ASSERT_NAMED(root, "ref"), "no_such_tag");
+    ASSERT_CHECKBOX_TEXT(ASSERT_NAMED(root, "opt"), "no_such_tag");
+}
+
+/**
+ * PRECEDENCE, pinned against the label rather than invented.
+ *
+ * lv_label has no fixed rule: lv_label_set_text() clears the stored tag and
+ * lv_label_set_translation_tag() overwrites the text, so the winner is whichever
+ * attribute the apply loop reaches LAST - i.e. document order. Both orders are
+ * asserted, and each is asserted equal to what a label does with the same pair.
+ */
+static void test_checkbox_text_and_translation_tag_precedence_matches_the_label(void)
+{
+    register_inline_pack();
+    lv_translation_set_language("de");
+
+    lv_obj_t * root = BUILD("cb_i18n_order",
+                            COMPONENT("<lv_checkbox name=\"cb_tag_last\" text=\"literal\" translation_tag=\"dog\"/>"
+                                      "<lv_label    name=\"lb_tag_last\" text=\"literal\" translation_tag=\"dog\"/>"
+                                      "<lv_checkbox name=\"cb_text_last\" translation_tag=\"dog\" text=\"literal\"/>"
+                                      "<lv_label    name=\"lb_text_last\" translation_tag=\"dog\" text=\"literal\"/>"));
+
+    /* Whatever the label does, the checkbox does. */
+    const char * tag_last = lv_label_get_text(ASSERT_NAMED(root, "lb_tag_last"));
+    const char * text_last = lv_label_get_text(ASSERT_NAMED(root, "lb_text_last"));
+    ASSERT_CHECKBOX_TEXT(ASSERT_NAMED(root, "cb_tag_last"), tag_last);
+    ASSERT_CHECKBOX_TEXT(ASSERT_NAMED(root, "cb_text_last"), text_last);
+
+    /* And that behaviour is order-sensitive, not a constant: if these were equal
+     * the two assertions above would pass no matter which attribute won. */
+    TEST_ASSERT_EQUAL_STRING_MESSAGE("Hund", tag_last,
+                                     "a trailing translation_tag= no longer beats text= on a label");
+    TEST_ASSERT_EQUAL_STRING_MESSAGE("literal", text_last,
+                                     "a trailing text= no longer beats translation_tag= on a label");
+}
+
+/**
+ * text= must also STOP the widget following the language, the way
+ * lv_label_set_text()'s remove_translation_tag() does. A checkbox that kept the
+ * handler armed would snap back to "Hund" on the next switch and silently
+ * overwrite the literal.
+ */
+static void test_a_trailing_text_attribute_stops_the_checkbox_following_the_language(void)
+{
+    register_inline_pack();
+    lv_translation_set_language("en");
+
+    lv_obj_t * root = BUILD("cb_i18n_text_wins",
+                            COMPONENT("<lv_checkbox name=\"opt\" translation_tag=\"dog\" text=\"literal\"/>"
+                                      "<lv_label name=\"ref\" translation_tag=\"dog\" text=\"literal\"/>"));
+    lv_obj_t * opt = ASSERT_NAMED(root, "opt");
+
+    lv_translation_set_language("de");
+    helix_test_pump(30);
+
+    ASSERT_LABEL_TEXT(ASSERT_NAMED(root, "ref"), "literal");
+    ASSERT_CHECKBOX_TEXT(opt, "literal");
+}
+
+/**
+ * An apply chain can run twice over one widget - the component's own view, then
+ * the attributes of the instance that used it. The second tag has to REPLACE the
+ * first, not stack another handler beside it: two armed handlers would race on
+ * every language change and the loser's copy would leak.
+ */
+static void test_a_second_translation_tag_replaces_the_first_rather_than_stacking(void)
+{
+    register_inline_pack();
+    lv_translation_set_language("en");
+
+    ASSERT_XML_REGISTERS("cb_i18n_leaf",
+                         "<component><view extends=\"lv_checkbox\" translation_tag=\"dog\"/></component>");
+
+    lv_obj_t * root = BUILD("cb_i18n_host",
+                            COMPONENT("<cb_i18n_leaf name=\"plain\"/>"
+                                      "<cb_i18n_leaf name=\"opt\" translation_tag=\"cat\"/>"));
+    lv_obj_t * plain = ASSERT_NAMED(root, "plain");
+    lv_obj_t * opt = ASSERT_NAMED(root, "opt");
+
+    /* Premise check: the view's own tag really does reach the widget, so `opt`
+     * genuinely has a tag applied twice. Without this the rest is vacuous. */
+    ASSERT_CHECKBOX_TEXT(plain, "Dog");
+    ASSERT_CHECKBOX_TEXT(opt, "Cat");
+
+    /* The structural half. Text alone cannot see stacking: the two handlers fire
+     * in registration order, so the later tag wins the visible string either way.
+     * `plain` carries exactly one registration, so `opt` carrying more means the
+     * first tag was never taken down - and its copy was never freed. */
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(lv_obj_get_event_count(plain), lv_obj_get_event_count(opt),
+                                     "the overriding translation_tag= stacked another handler "
+                                     "instead of replacing the one already there");
+
+    lv_translation_set_language("de");
+    helix_test_pump(30);
+    ASSERT_CHECKBOX_TEXT(opt, "Katze");
+}
+
+/**
+ * The attribute is now HANDLED, so the unknown-attribute check must stop
+ * reporting it. Kept next to the behaviour it belongs to rather than in
+ * test_malformed.c, because it is only true while the branch above exists.
+ */
+static void test_a_checkbox_translation_tag_is_not_reported_as_an_unknown_attribute(void)
+{
+    register_inline_pack();
+
+    log_capture_start();
+    lv_obj_t * root = BUILD("cb_i18n_quiet",
+                            COMPONENT("<lv_checkbox name=\"opt\" translation_tag=\"dog\"/>"));
+    log_capture_stop();
+
+    ASSERT_NAMED(root, "opt");
+    TEST_ASSERT_FALSE_MESSAGE(log_contains("Unknown attribute"),
+                              "translation_tag= on a checkbox still warns as an unknown attribute");
+}
+
 #endif /* LV_USE_TRANSLATION */
 
 /*---------------------------------------------------------------------------
@@ -539,6 +737,14 @@ int main(void)
     RUN_TEST(test_inline_text_is_applied_as_a_translation_tag);
     RUN_TEST(test_inline_text_re_resolves_on_a_language_change);
     RUN_TEST(test_the_collapsed_text_is_what_becomes_the_translation_key);
+
+    RUN_TEST(test_a_translation_tag_on_a_checkbox_resolves_to_the_translated_string);
+    RUN_TEST(test_a_checkbox_translation_tag_re_resolves_on_a_language_change);
+    RUN_TEST(test_an_unknown_translation_tag_on_a_checkbox_shows_the_tag);
+    RUN_TEST(test_checkbox_text_and_translation_tag_precedence_matches_the_label);
+    RUN_TEST(test_a_trailing_text_attribute_stops_the_checkbox_following_the_language);
+    RUN_TEST(test_a_second_translation_tag_replaces_the_first_rather_than_stacking);
+    RUN_TEST(test_a_checkbox_translation_tag_is_not_reported_as_an_unknown_attribute);
 #endif
 
     return UNITY_END();

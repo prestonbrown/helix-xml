@@ -1,0 +1,31 @@
+# CMake build trees for the test suite (tests/CMakeLists.txt).
+build/
+build-*/
+cmake-build-*/
+
+# FetchContent's LVGL checkout and its stamps. Large, and reproducible from
+# the pinned tag in tests/CMakeLists.txt.
+_deps/
+
+# CMake droppings, in case anyone configures in-tree.
+CMakeCache.txt
+CMakeFiles/
+CMakeUserPresets.json
+cmake_install.cmake
+CTestTestfile.cmake
+Testing/
+install_manifest.txt
+compile_commands.json
+*.cmake.stamp
+
+# Build artefacts
+*.o
+*.a
+*.so
+*.dylib
+*.dSYM/
+
+# Editor / OS
+.DS_Store
+.cache/
+*.swp

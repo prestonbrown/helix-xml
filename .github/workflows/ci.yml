@@ -1,0 +1,180 @@
+# SPDX-License-Identifier: MIT
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Must match HELIX_LVGL_TAG in tests/CMakeLists.txt. It is the cache key, so
+  # bumping the tag there without bumping it here would serve a stale checkout.
+  LVGL_TAG: v9.5.0
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # The suite, on both compilers.
+  # ---------------------------------------------------------------------------
+  test:
+    name: test (${{ matrix.cc }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        cc: [gcc, clang]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache LVGL checkout
+        uses: actions/cache@v4
+        with:
+          path: build/_deps
+          key: deps-${{ runner.os }}-${{ matrix.cc }}-lvgl-${{ env.LVGL_TAG }}
+          restore-keys: deps-${{ runner.os }}-${{ matrix.cc }}-lvgl-
+
+      - name: Configure
+        env:
+          CC: ${{ matrix.cc }}
+        run: cmake -S tests -B build -DCMAKE_BUILD_TYPE=Debug
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+  # ---------------------------------------------------------------------------
+  # Same suite under ASan + UBSan.
+  # ---------------------------------------------------------------------------
+  sanitize:
+    name: sanitize (asan+ubsan)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache LVGL checkout
+        uses: actions/cache@v4
+        with:
+          path: build-san/_deps
+          key: deps-${{ runner.os }}-san-lvgl-${{ env.LVGL_TAG }}
+          restore-keys: deps-${{ runner.os }}-san-lvgl-
+
+      - name: Configure
+        env:
+          CC: clang
+        run: |
+          cmake -S tests -B build-san \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer -g" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
+
+      - name: Build
+        run: cmake --build build-san --parallel
+
+      - name: Test
+        env:
+          # halt_on_error keeps UBSan from reporting and continuing, which would
+          # let a test "pass" with undefined behaviour in it.
+          ASAN_OPTIONS: detect_leaks=1:abort_on_error=1:strict_string_checks=1
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+        run: ctest --test-dir build-san --output-on-failure
+
+  # ---------------------------------------------------------------------------
+  # The #if guards in the library.
+  #
+  # Every .c under src/xml/, src/xml/parsers/ and src/libs/expat/ is wrapped in
+  # `#if LV_USE_XML`; lv_xml_translation.c additionally needs LV_USE_TRANSLATION
+  # and lv_xml_update.c additionally needs LV_USE_OBJ_NAME. This job proves the
+  # guards actually hold, by building the library (not the tests) against
+  # generated variant configs. tests/lv_conf.h is never edited.
+  # ---------------------------------------------------------------------------
+  conf-guards:
+    name: conf-guards
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache LVGL checkout
+        uses: actions/cache@v4
+        with:
+          path: build-guard/_deps
+          key: deps-${{ runner.os }}-guard-lvgl-${{ env.LVGL_TAG }}
+          restore-keys: deps-${{ runner.os }}-guard-lvgl-
+
+      # Fetch LVGL once, then hand the same checkout to every variant with
+      # -DLVGL_DIR. Otherwise each variant's build dir gets its own _deps and
+      # the cache above would never be hit.
+      - name: Fetch LVGL once
+        run: |
+          set -eux
+          cmake -S tests -B build-guard
+          echo "LVGL_SRC=$PWD/build-guard/_deps/lvgl-src" >> "$GITHUB_ENV"
+
+      # --- variant 1: LV_USE_XML 0 -----------------------------------------
+      # The whole library must collapse to empty translation units and still
+      # produce a linkable archive.
+      - name: 'Variant: LV_USE_XML 0'
+        run: |
+          set -eux
+          mkdir -p conf-variants/xml-off
+          sed -E 's/^#define LV_USE_XML +1$/#define LV_USE_XML 0/' \
+            tests/lv_conf.h > conf-variants/xml-off/lv_conf.h
+          grep -qE '^#define LV_USE_XML +0$' conf-variants/xml-off/lv_conf.h
+          cmake -S tests -B build-guard-xml-off \
+            -DLVGL_DIR="$LVGL_SRC" \
+            -DLV_BUILD_CONF_DIR="$PWD/conf-variants/xml-off"
+          cmake --build build-guard-xml-off --target helix_xml --parallel
+
+      # --- variant 2: LV_USE_TRANSLATION 0 ---------------------------------
+      # XML stays on. Only lv_xml_translation.c must drop out; every call site
+      # of it elsewhere has to be guarded too, or this fails to compile/link.
+      - name: 'Variant: LV_USE_TRANSLATION 0'
+        run: |
+          set -eux
+          mkdir -p conf-variants/translation-off
+          sed -E 's/^#define LV_USE_TRANSLATION +1$/#define LV_USE_TRANSLATION 0/' \
+            tests/lv_conf.h > conf-variants/translation-off/lv_conf.h
+          grep -qE '^#define LV_USE_TRANSLATION +0$' conf-variants/translation-off/lv_conf.h
+          grep -qE '^#define LV_USE_XML +1$' conf-variants/translation-off/lv_conf.h
+          cmake -S tests -B build-guard-translation-off \
+            -DLVGL_DIR="$LVGL_SRC" \
+            -DLV_BUILD_CONF_DIR="$PWD/conf-variants/translation-off"
+          cmake --build build-guard-translation-off --target helix_xml --parallel
+
+      # --- variant 3: LV_USE_OBJ_NAME 0 ------------------------------------
+      # This one is a NEGATIVE check, and deliberately so.
+      #
+      # lv_xml_update.c is guarded `#if LV_USE_XML && LV_USE_OBJ_NAME`, but
+      # lv_xml.c carries a hard `#error "LV_USE_OBJ_NAME is required to use
+      # XMLs"` - names are how the engine addresses anything it builds, so a
+      # silent build without them would be worse than no build at all. The
+      # guard that matters here is therefore that the build FAILS, loudly and
+      # with that message. Turning LV_USE_XML off as well would make this
+      # variant a duplicate of variant 1 and would test nothing.
+      - name: 'Variant: LV_USE_OBJ_NAME 0 must fail with a clear #error'
+        run: |
+          set -eux
+          mkdir -p conf-variants/objname-off
+          sed -E 's/^#define LV_USE_OBJ_NAME +1$/#define LV_USE_OBJ_NAME 0/' \
+            tests/lv_conf.h > conf-variants/objname-off/lv_conf.h
+          grep -qE '^#define LV_USE_OBJ_NAME +0$' conf-variants/objname-off/lv_conf.h
+          grep -qE '^#define LV_USE_XML +1$' conf-variants/objname-off/lv_conf.h
+          cmake -S tests -B build-guard-objname-off \
+            -DLVGL_DIR="$LVGL_SRC" \
+            -DLV_BUILD_CONF_DIR="$PWD/conf-variants/objname-off"
+          set +e
+          cmake --build build-guard-objname-off --target helix_xml --parallel > objname.log 2>&1
+          rc=$?
+          set -e
+          cat objname.log
+          if [ "$rc" -eq 0 ]; then
+            echo "::error::Building with LV_USE_OBJ_NAME 0 succeeded, but lv_xml.c is supposed to #error."
+            exit 1
+          fi
+          grep -q 'LV_USE_OBJ_NAME is required to use XMLs' objname.log \
+            || { echo "::error::Build failed, but not with the expected #error from lv_xml.c."; exit 1; }

@@ -1097,12 +1097,11 @@ static void test_oversized_values_and_identifiers_stay_usable(void)
  * every single time. A commented-out block of XML is an entirely ordinary
  * thing to have in a layout file.
  *
- * PINS CURRENT BEHAVIOUR - suspected bug (second, independent): when the view
- * parse fails partway, lv_xml_create_in_scope() returns NULL but does NOT
- * destroy the widgets it already built. They stay parented to the caller's
- * parent, which here is the screen. The caller receives NULL and therefore has
- * no handle with which to clean them up, so a failing hot reload accumulates
- * orphaned subtrees on the live screen.
+ * Doubles as the guard for the failed-create cleanup: a view parse that dies
+ * partway has already built widgets onto the caller's parent, and the caller
+ * gets NULL back, so it has no handle with which to clean them up. A failing
+ * hot reload used to accumulate orphaned subtrees on the live screen. The error
+ * path now destroys exactly what it built - and nothing the caller already had.
  */
 static void test_literal_view_close_inside_a_comment_breaks_creation(void)
 {
@@ -1135,6 +1134,12 @@ static void test_literal_view_close_inside_a_comment_breaks_creation(void)
         lv_obj_clean(screen);
         lv_xml_component_unregister(SUBJECT_NAME);
 
+        /* A pre-existing child of the caller's parent. The failure path has to
+         * tell "what this parse built" from "what the caller already had", so
+         * this must still be standing afterwards. */
+        lv_obj_t * bystander = lv_obj_create(screen);
+        lv_obj_set_name(bystander, "bystander");
+
         log_capture_start();
         lv_result_t res = lv_xml_register_component_from_data(SUBJECT_NAME, rows[i].xml);
         lv_obj_t * root = (res == LV_RESULT_OK) ? lv_xml_create(screen, SUBJECT_NAME, NULL) : NULL;
@@ -1160,18 +1165,22 @@ static void test_literal_view_close_inside_a_comment_breaks_creation(void)
             helix_xml_assert_msgf("\"%s\": the failed create was not reported to the caller's "
                                   "log; got: %.400s", rows[i].desc, g_log_buf));
 
-        /* The orphan. Creation returned NULL, yet the partially built subtree is
-         * still hanging off the screen with no way for the caller to reach it. */
-        lv_obj_t * orphan = lv_obj_find_by_name(screen, "before");
-        TEST_ASSERT_NOT_NULL_MESSAGE(
-            orphan,
-            helix_xml_assert_msgf("\"%s\": the partial subtree is no longer orphaned onto the "
-                                  "parent - the leak may be fixed; re-read this test",
-                                  rows[i].desc));
+        /* No orphan. Creation returned NULL, so the partially built subtree must
+         * be gone: the caller has no handle to it and could never clean it up. */
+        TEST_ASSERT_NULL_MESSAGE(
+            lv_obj_find_by_name(screen, "before"),
+            helix_xml_assert_msgf("\"%s\": the partially built subtree is still orphaned onto "
+                                  "the caller's parent after a failed create", rows[i].desc));
+        /* ...and the caller's own child is untouched: exactly the bystander is left. */
         TEST_ASSERT_EQUAL_UINT32_MESSAGE(
             1u, lv_obj_get_child_count(screen),
-            helix_xml_assert_msgf("\"%s\": unexpected number of orphans left on the screen",
-                                  rows[i].desc));
+            helix_xml_assert_msgf("\"%s\": after a failed create the screen holds %" LV_PRIu32
+                                  " object(s); expected only the bystander", rows[i].desc,
+                                  lv_obj_get_child_count(screen)));
+        TEST_ASSERT_EQUAL_PTR_MESSAGE(
+            bystander, lv_obj_get_child(screen, 0),
+            helix_xml_assert_msgf("\"%s\": the failed-create cleanup destroyed a child the caller "
+                                  "already had", rows[i].desc));
 
         assert_engine_still_works(rows[i].desc);
     }

@@ -63,6 +63,7 @@ static char * extract_view_content(const char * xml_definition);
 static style_prop_anim_type_t style_prop_anim_get_type(lv_style_prop_t prop);
 static void anim_exec_cb(lv_anim_t * a, int32_t v);
 static void component_scope_free(lv_xml_component_scope_t * scope);
+static void component_scope_drop_others(const char * name, const lv_xml_component_scope_t * keep);
 
 /**********************
  *  STATIC VARIABLES
@@ -220,10 +221,29 @@ lv_result_t lv_xml_register_component_from_data(const char * name, const char * 
         scope->name = lv_strdup(name);
         if(!scope->view_def) {
             LV_LOG_WARN("Failed to extract view content");
-            /* Clean up and return error */
+            /* Clean up and return error. get_scope() matches from the head, so
+             * this removes the scope just inserted above; a definition already
+             * registered under the same name is deliberately left standing -
+             * a half-written file mid-hot-reload must not destroy the working
+             * component it failed to replace. */
             lv_xml_component_unregister(name);
             return LV_RESULT_INVALID;
         }
+
+        /* The new definition REPLACES any earlier one registered under the same
+         * name. Without this the old scope stays in the registry, shadowed but
+         * never reclaimed: lookups match the head so the new definition wins,
+         * while foreach reports the name twice and one unregister only exposes
+         * the older definition again. HELIX_HOT_RELOAD re-registers on every
+         * file save, so it accumulated a full scope per save.
+         *
+         * Freeing a scope that still has live instances is the same operation
+         * the public lv_xml_component_unregister() already performs, and it
+         * carries the same precondition: the scope's lv_style_t storage dies
+         * with it, so a caller that keeps old instances alive must keep them
+         * out of any layout or draw pass until they are deleted. Deferred
+         * to after the view_def check so a failed parse changes nothing. */
+        component_scope_drop_others(name, scope);
     }
 
     return LV_RESULT_OK;
@@ -365,6 +385,23 @@ void lv_xml_component_deinit(void)
  *   STATIC FUNCTIONS
  **********************/
 
+/** Unlink and free every scope registered under `name` except `keep`.
+ *  The registry is a plain list with no uniqueness constraint, so this is what
+ *  makes re-registration a replacement rather than a shadowing insert. */
+static void component_scope_drop_others(const char * name, const lv_xml_component_scope_t * keep)
+{
+    lv_xml_component_scope_t * scope = lv_ll_get_head(&component_scope_ll);
+    while(scope != NULL) {
+        /* Read `next` before the node can be freed. */
+        lv_xml_component_scope_t * next = lv_ll_get_next(&component_scope_ll, scope);
+        if(scope != keep && scope->name != NULL && lv_streq(scope->name, name)) {
+            lv_ll_remove(&component_scope_ll, scope);
+            component_scope_free(scope);
+        }
+        scope = next;
+    }
+}
+
 /** Release everything a scope owns, and the scope itself. The caller must have
  *  already unlinked it from `component_scope_ll`. */
 static void component_scope_free(lv_xml_component_scope_t * scope)
@@ -415,6 +452,16 @@ static void component_scope_free(lv_xml_component_scope_t * scope)
         lv_free((char *)grad->name);
     }
     lv_ll_clear(&scope->gradient_ll);
+
+    /* Event callbacks: only the name is heap (lv_strdup in lv_xml_register_event_cb);
+     * `cb` is a function pointer the application owns. Callbacks are resolved at
+     * create time and copied into the widget's own event list, so nothing that
+     * survives this scope points back at these records. */
+    lv_xml_event_cb_t * event_cb;
+    LV_LL_READ(&scope->event_ll, event_cb) {
+        lv_free((char *)event_cb->name);
+    }
+    lv_ll_clear(&scope->event_ll);
 
     /* Subject-bound fragment records (<repeat>, and later <if>) MUST be torn down
      * BEFORE subject_expr_ll and subjects_ll: each record's observer sits on a

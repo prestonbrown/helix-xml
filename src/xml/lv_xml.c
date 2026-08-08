@@ -104,6 +104,7 @@ static char * xml_compose_indexed(lv_xml_parser_state_t * state, const char * ra
 static bool xml_state_track_string(lv_xml_parser_state_t * state, char * owned);
 static const char * xml_state_concat2(lv_xml_parser_state_t * state, const char * a, const char * b);
 static void xml_state_free_composed(lv_xml_parser_state_t * state);
+static void destroy_partial_view(lv_xml_parser_state_t * state, lv_obj_t * parent, uint32_t children_before);
 static void create_timeline_instances(lv_xml_parser_state_t * state);
 static void get_timeline_from_event_cb(lv_event_t * e);
 static void free_timelines_event_cb(lv_event_t * e);
@@ -343,6 +344,11 @@ void * lv_xml_create_in_scope(lv_obj_t * parent, lv_xml_component_scope_t * pare
     }
     *parent_node = parent;
 
+    /*Watermark for the failure path: everything this parse builds under `parent`
+     *lands at an index at or above this one, so the partial tree can be identified
+     *without ever touching a child the caller already had.*/
+    const uint32_t parent_children_before = parent ? lv_obj_get_child_count(parent) : 0;
+
     /* Create an XML parser and set handlers */
     XML_Memory_Handling_Suite mem_handlers;
     mem_handlers.malloc_fcn = lv_malloc;
@@ -362,7 +368,17 @@ void * lv_xml_create_in_scope(lv_obj_t * parent, lv_xml_component_scope_t * pare
             xml_frag_capture_free((xml_frag_capture_t *)state.context);
             state.context = NULL;
         }
+
+        /*Destroy whatever the aborted parse already built. The caller is about to
+         *receive NULL, so it has no handle to clean up with, and anything left
+         *behind stays parented to ITS parent - a repeatedly-failing hot reload
+         *would pile partial subtrees onto the live screen. Deleted before the
+         *state teardown below so the widgets' LV_EVENT_DELETE callbacks (frag
+         *records, timeline arrays) still run against intact state.*/
+        destroy_partial_view(&state, parent, parent_children_before);
+
         xml_state_free_composed(&state);
+        lv_ll_clear(&state.parent_ll);
         free_pcdata_ll(&state);
         XML_ParserFree(parser);
         return NULL;
@@ -2039,6 +2055,44 @@ static void xml_state_free_composed(lv_xml_parser_state_t * state)
     state->composed_strings = NULL;
     state->composed_count = 0;
     state->composed_cap = 0;
+}
+
+/**
+ * Destroy the widgets an ABORTED lv_xml_create_in_scope() parse already built.
+ *
+ * The caller of a failed create gets NULL back and therefore no handle to the
+ * partial tree, so if this does not run the fragment stays attached to the
+ * caller's own parent forever.
+ *
+ * Identification is by watermark, not by `state->view`: the view root is only
+ * assigned once the `<view>` element itself has been created, and a parse that
+ * fails earlier - or one whose `<view>` create_cb returns NULL - still builds
+ * following elements straight onto the caller's parent with `state->view` left
+ * NULL. Deleting from the tail down to `children_before` covers both shapes and
+ * cannot reach a child the caller already had.
+ *
+ * `parent == NULL` is the screen case: nothing was appended to a parent, so the
+ * only thing to reclaim is the orphan screen in `state->view`.
+ */
+static void destroy_partial_view(lv_xml_parser_state_t * state, lv_obj_t * parent, uint32_t children_before)
+{
+    if(parent == NULL) {
+        if(state->view) lv_obj_delete(state->view);
+    }
+    else {
+        uint32_t count = lv_obj_get_child_count(parent);
+        while(count > children_before) {
+            lv_obj_delete(lv_obj_get_child(parent, (int32_t)count - 1));
+            uint32_t now = lv_obj_get_child_count(parent);
+            /*A delete that does not shrink the parent would spin forever; bail
+             *rather than hang, leaving the remainder attached.*/
+            if(now >= count) break;
+            count = now;
+        }
+    }
+
+    state->view = NULL;
+    state->item = NULL;
 }
 
 /* Resolver shim: <if cond="..."> looks up subjects referenced by the expression

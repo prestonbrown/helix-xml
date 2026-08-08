@@ -670,20 +670,21 @@ static void test_event_cb_foreach_does_not_fall_back_to_globals_but_get_does(voi
 }
 
 /**
- * PINS CURRENT BEHAVIOUR - suspected bug: `event_ll` is the one registry
- * component_scope_free() (lv_xml_component.c) never walks. Every other list on
- * the scope - consts, params, fonts, images, styles, gradients, subjects,
- * timelines - is freed and lv_ll_clear()ed there; event_ll is not mentioned at
- * all, so each registration's lv_ll node and its lv_strdup'd name outlive the
- * component. Nothing but lv_xml_deinit() reclaims them. HelixScreen registers
- * event callbacks per component and HELIX_HOT_RELOAD re-registers components on
- * every file save, so this accumulates across a dev session.
+ * `event_ll` used to be the one registry component_scope_free()
+ * (lv_xml_component.c) never walked. Every other list on the scope - consts,
+ * params, fonts, images, styles, gradients, subjects, timelines - was freed and
+ * lv_ll_clear()ed there; event_ll was not mentioned at all, so each
+ * registration's lv_ll node and its lv_strdup'd name outlived the component and
+ * only lv_xml_deinit() ever reclaimed them. HelixScreen registers event
+ * callbacks per component and HELIX_HOT_RELOAD re-registers components on every
+ * file save, so it accumulated across a dev session.
  *
- * Asserted as "the heap does not come back", which is what actually happens. If
- * component_scope_free() is fixed to free event_ll, this test fails - flip it to
- * TEST_ASSERT_EQUAL_size_t then and keep it as the regression guard.
+ * Guarded here as "a register/register-event-cb/unregister cycle returns the
+ * heap to exactly where the previous cycle left it": a per-cycle leak shows up
+ * as free_size falling monotonically. Only the record's `name` is heap - `cb` is
+ * a function pointer the application owns - so the free must not touch it.
  */
-static void test_unregistering_a_component_leaks_its_event_cb_records(void)
+static void test_unregistering_a_component_frees_its_event_cb_records(void)
 {
     size_t after_cycle[4];
 
@@ -699,12 +700,13 @@ static void test_unregistering_a_component_leaks_its_event_cb_records(void)
     }
 
     /* Cycle 0 is a warm-up (see the same note in test_component.c); cycles 1..3
-     * are steady state, and each one loses ground to the leaked record. */
+     * are steady state and must all land on the same figure. */
     for(int i = 2; i < 4; i++) {
-        TEST_ASSERT_TRUE_MESSAGE(
-            after_cycle[i] < after_cycle[i - 1],
-            "component_scope_free() now frees event_ll - the leak this test pins is fixed. "
-            "Change these to TEST_ASSERT_EQUAL_size_t(after_cycle[1], after_cycle[i]).");
+        TEST_ASSERT_EQUAL_size_t_MESSAGE(
+            after_cycle[1], after_cycle[i],
+            helix_xml_assert_msgf(
+                "cycle %d did not return the heap to where cycle 1 left it - "
+                "component_scope_free() is leaking the scope's event_cb records again", i));
     }
 }
 
@@ -745,7 +747,7 @@ int main(void)
     RUN_TEST(test_getting_an_absent_event_cb_returns_null_and_warns);
     RUN_TEST(test_event_cb_foreach_visits_every_registration_in_the_scope);
     RUN_TEST(test_event_cb_foreach_does_not_fall_back_to_globals_but_get_does);
-    RUN_TEST(test_unregistering_a_component_leaks_its_event_cb_records);
+    RUN_TEST(test_unregistering_a_component_frees_its_event_cb_records);
 
     return UNITY_END();
 }

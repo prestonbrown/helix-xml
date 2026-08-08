@@ -542,62 +542,97 @@ static void test_component_foreach_visits_globals_and_every_registered_component
                               "an unregistered component is still enumerated");
 }
 
+static const char * DUP_V1 =
+    "<component><view extends=\"lv_obj\" name=\"dup_root\">"
+    "<lv_label name=\"dup_label\" text=\"version one\"/></view></component>";
+static const char * DUP_V2 =
+    "<component><view extends=\"lv_obj\" name=\"dup_root\">"
+    "<lv_label name=\"dup_label\" text=\"version two\"/></view></component>";
+
 /**
- * PINS CURRENT BEHAVIOUR - suspected bug: registering a name that is already in
- * use does not replace the old scope, it SHADOWS it. lv_xml_register_component_
- * from_data() always lv_ll_ins_head()s a new scope, and lv_xml_component_get_
- * scope() returns the first match walking from the head, so the newest
- * definition wins lookups while the older one stays in the registry, still
- * holding its heap (name, view_def, consts, subjects). Two consequences, both
- * asserted below: foreach reports the name twice, and ONE unregister resurrects
- * the previous definition instead of removing the component. Only
- * lv_xml_deinit() ever reclaims the shadowed scope. HELIX_HOT_RELOAD
- * re-registers components on every file save, so this accumulates per save.
+ * Registering a name that is already in use REPLACES the old definition; it does
+ * not shadow it. The registry is a plain list with no uniqueness constraint, and
+ * registration used to lv_ll_ins_head() unconditionally while lookup returned
+ * the first match from the head - so the newest definition won lookups while the
+ * old one stayed in the registry holding its whole heap (name, view_def, consts,
+ * subjects). foreach reported the name twice, ONE unregister only exposed the
+ * previous definition again, and nothing short of lv_xml_deinit() reclaimed the
+ * shadowed scope. HELIX_HOT_RELOAD re-registers on every file save, so it
+ * accumulated a full scope per save.
+ *
+ * Freeing the old scope is the same operation lv_xml_component_unregister()
+ * already performs and carries the same precondition: delete instances of the
+ * old definition before (or promptly after) replacing it, because the scope's
+ * lv_style_t storage dies with it.
  */
-static void test_re_registering_a_name_shadows_the_previous_definition(void)
+static void test_re_registering_a_name_replaces_the_previous_definition(void)
 {
-    static const char * V1 =
-        "<component><view extends=\"lv_obj\" name=\"dup_root\">"
-        "<lv_label name=\"dup_label\" text=\"version one\"/></view></component>";
-    static const char * V2 =
-        "<component><view extends=\"lv_obj\" name=\"dup_root\">"
-        "<lv_label name=\"dup_label\" text=\"version two\"/></view></component>";
+    ASSERT_XML_REGISTERS("dup_comp", DUP_V1);
+    TEST_ASSERT_NOT_NULL(lv_xml_component_get_scope("dup_comp"));
 
-    ASSERT_XML_REGISTERS("dup_comp", V1);
-    lv_xml_component_scope_t * first = lv_xml_component_get_scope("dup_comp");
+    ASSERT_XML_REGISTERS("dup_comp", DUP_V2);
 
-    ASSERT_XML_REGISTERS("dup_comp", V2);
-    lv_xml_component_scope_t * second = lv_xml_component_get_scope("dup_comp");
+    /* Exactly one scope answers to the name - globals plus dup_comp, no shadow.
+     * (The old scope pointer is freed by now, so it is deliberately not compared:
+     * the allocator is free to hand the same address straight back.) */
+    name_collector_t c = {{NULL}, 0};
+    lv_xml_component_foreach(collect_name_cb, &c);
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(2, c.count,
+                                     "expected globals + ONE dup_comp scope; the previous "
+                                     "definition is still in the registry, shadowed");
 
-    TEST_ASSERT_NOT_EQUAL_MESSAGE((uintptr_t)first, (uintptr_t)second,
-                                  "re-registering reused the existing scope - update this test, "
-                                  "the shadowing bug it pins would be fixed");
-
-    /* The newest definition wins creation... */
+    /* The newest definition is what builds. */
     lv_obj_t * newest = XML_CREATE(helix_test_env_screen(), "dup_comp", NULL);
     helix_test_pump(30);
     ASSERT_LABEL_TEXT(ASSERT_NAMED(newest, "dup_label"), "version two");
 
-    /* ...but the old one is still in the registry, enumerated under the same name. */
-    name_collector_t c = {{NULL}, 0};
-    lv_xml_component_foreach(collect_name_cb, &c);
-    TEST_ASSERT_EQUAL_UINT32_MESSAGE(3, c.count,
-                                     "expected globals + BOTH dup_comp scopes to be enumerated");
-
-    /* One unregister removes only the shadowing scope: the shadowed V1 returns. */
-    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_component_unregister("dup_comp"));
-    TEST_ASSERT_EQUAL_PTR_MESSAGE(first, lv_xml_component_get_scope("dup_comp"),
-                                  "unregister did not expose the shadowed scope");
-
-    lv_obj_t * resurrected = XML_CREATE(helix_test_env_screen(), "dup_comp", NULL);
+    /* Documented teardown order: instances first, then the component. */
+    lv_obj_clean(helix_test_env_screen());
     helix_test_pump(30);
-    ASSERT_LABEL_TEXT(ASSERT_NAMED(resurrected, "dup_label"), "version one");
 
-    /* A second unregister finally empties the name. */
+    /* ONE unregister empties the name - there is no older definition to resurface. */
     TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_component_unregister("dup_comp"));
-    TEST_ASSERT_NULL(lv_xml_component_get_scope("dup_comp"));
+    TEST_ASSERT_NULL_MESSAGE(lv_xml_component_get_scope("dup_comp"),
+                             "one unregister did not remove the component - a shadowed "
+                             "definition resurfaced");
     TEST_ASSERT_EQUAL_INT_MESSAGE(LV_RESULT_INVALID, (int)lv_xml_component_unregister("dup_comp"),
                                   "unregistering an absent component must report failure");
+}
+
+/**
+ * A re-registration that FAILS must leave the definition already in place
+ * standing. HELIX_HOT_RELOAD fires on every save, including on a file caught
+ * half-written, and losing the working component to a truncated read would take
+ * the running panel down with it.
+ *
+ * The fixture has no `<view>` at all, so extract_view_content() returns NULL and
+ * registration reports LV_RESULT_INVALID - after the metadata parse has already
+ * run, which is the point: the replacement is committed only once the new
+ * definition is known to be complete.
+ */
+static void test_a_failed_re_registration_leaves_the_previous_definition_intact(void)
+{
+    static const char * NO_VIEW = "<component><consts><px name=\"x\" value=\"1\"/></consts></component>";
+
+    ASSERT_XML_REGISTERS("dup_comp", DUP_V1);
+
+    log_capture_start();
+    lv_result_t res = lv_xml_register_component_from_data("dup_comp", NO_VIEW);
+    log_capture_stop();
+    TEST_ASSERT_EQUAL_INT_MESSAGE(LV_RESULT_INVALID, (int)res,
+                                  "a component with no <view> must not register");
+
+    TEST_ASSERT_NOT_NULL_MESSAGE(lv_xml_component_get_scope("dup_comp"),
+                                 "the failed re-registration destroyed the working definition");
+
+    name_collector_t c = {{NULL}, 0};
+    lv_xml_component_foreach(collect_name_cb, &c);
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(2, c.count,
+                                     "the failed re-registration left a scope behind");
+
+    lv_obj_t * still_v1 = XML_CREATE(helix_test_env_screen(), "dup_comp", NULL);
+    helix_test_pump(30);
+    ASSERT_LABEL_TEXT(ASSERT_NAMED(still_v1, "dup_label"), "version one");
 }
 
 /*===========================================================================
@@ -772,7 +807,8 @@ int main(void)
 
     RUN_TEST(test_get_scope_resolves_only_registered_names);
     RUN_TEST(test_component_foreach_visits_globals_and_every_registered_component);
-    RUN_TEST(test_re_registering_a_name_shadows_the_previous_definition);
+    RUN_TEST(test_re_registering_a_name_replaces_the_previous_definition);
+    RUN_TEST(test_a_failed_re_registration_leaves_the_previous_definition_intact);
 
     RUN_TEST(test_unregistering_a_component_returns_its_scope_memory_to_the_heap);
     RUN_TEST(test_unregistering_a_component_removes_its_scope_owned_subject);

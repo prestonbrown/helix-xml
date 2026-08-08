@@ -316,18 +316,23 @@ static void test_style_string_process_splits_the_name_from_state_and_part_tokens
 }
 
 /**
- * PINS CURRENT BEHAVIOUR - suspected bug: a misspelled state/part token in an
- * inline style attribute name (`style_radius-presed`) is silently discarded.
- * lv_xml_style_string_process() ORs lv_xml_style_state_to_enum() and
- * lv_xml_style_part_to_enum() together, and BOTH return 0 for an unrecognised
- * string without logging - so the selector collapses to
- * LV_STATE_DEFAULT|LV_PART_MAIN and the property is applied unconditionally
- * instead of only in the intended state. The other selector path,
- * lv_xml_style_selector_text_to_enum() (the `selector="..."` attribute), warns
- * on exactly the same input; see the sibling test below. The two paths must
- * eventually agree.
+ * A misspelled state/part token in an inline style attribute name
+ * (`style_radius-presed`) is reported.
+ *
+ * lv_xml_style_string_process() used to OR lv_xml_style_state_to_enum() and
+ * lv_xml_style_part_to_enum() together; BOTH return 0 for an unrecognised
+ * string without logging, so the selector collapsed to
+ * LV_STATE_DEFAULT|LV_PART_MAIN and the property was applied unconditionally
+ * instead of only in the intended state, with nothing said. The other selector
+ * path, lv_xml_style_selector_text_to_enum() (the `selector="..."` attribute),
+ * always warned on exactly the same input. Both now go through the one
+ * resolver, lv_xml_style_selector_token_to_enum(), which distinguishes
+ * "unknown" from "known, value 0".
+ *
+ * The selector still collapses to 0 - the return semantics stay lenient, only
+ * the silence is fixed.
  */
-static void test_style_string_process_silently_swallows_an_unknown_selector_token(void)
+static void test_style_string_process_reports_an_unknown_selector_token(void)
 {
     lv_style_selector_t sel = 0xDEAD;
 
@@ -337,16 +342,57 @@ static void test_style_string_process_silently_swallows_an_unknown_selector_toke
     log_capture_stop();
 
     TEST_ASSERT_EQUAL_UINT32_MESSAGE(
-        0, sel, "an unknown token currently collapses to the default state / main part");
-    TEST_ASSERT_FALSE_MESSAGE(log_contains("presed"),
-                              "nothing is logged today - if this starts failing the bug was fixed");
+        0, sel, "an unknown token must not contribute any selector bits");
+    TEST_ASSERT_TRUE_MESSAGE(log_contains("presed is an unknown token in style selector"),
+                             "a misspelled state/part token was swallowed silently");
 
-    /* The `selector=` path DOES report it. Same typo, different answer. */
+    /* The `selector=` path reports it in the same words. Same typo, same answer. */
     log_capture_start();
     TEST_ASSERT_EQUAL_UINT32(0, (uint32_t)lv_xml_style_selector_text_to_enum("presed"));
     log_capture_stop();
     TEST_ASSERT_TRUE_MESSAGE(log_contains("presed is an unknown token in style selector"),
                              "the selector= attribute path must keep reporting unknown tokens");
+}
+
+/**
+ * The trap in the fix: LV_STATE_DEFAULT and LV_PART_MAIN are both 0, so a
+ * naive "the enum came back 0, must be a typo" check would warn about the two
+ * most common tokens in the dialect. Neither `default` nor `main` may produce a
+ * diagnostic, on either path.
+ */
+static void test_the_zero_valued_tokens_default_and_main_do_not_warn(void)
+{
+    lv_style_selector_t sel;
+
+    log_capture_start();
+    char def[] = "style_radius-default";
+    TEST_ASSERT_EQUAL_STRING("style_radius", lv_xml_style_string_process(def, &sel));
+    TEST_ASSERT_EQUAL_UINT32((uint32_t)LV_STATE_DEFAULT, (uint32_t)sel);
+
+    char main_part[] = "style_radius-main";
+    TEST_ASSERT_EQUAL_STRING("style_radius", lv_xml_style_string_process(main_part, &sel));
+    TEST_ASSERT_EQUAL_UINT32((uint32_t)LV_PART_MAIN, (uint32_t)sel);
+
+    char both[] = "style_radius-default-main";
+    TEST_ASSERT_EQUAL_STRING("style_radius", lv_xml_style_string_process(both, &sel));
+    TEST_ASSERT_EQUAL_UINT32(0, (uint32_t)sel);
+
+    /* And the same two tokens through the selector= path. */
+    TEST_ASSERT_EQUAL_UINT32(0, (uint32_t)lv_xml_style_selector_text_to_enum("default"));
+    TEST_ASSERT_EQUAL_UINT32(0, (uint32_t)lv_xml_style_selector_text_to_enum("main"));
+    TEST_ASSERT_EQUAL_UINT32(0, (uint32_t)lv_xml_style_selector_text_to_enum("default|main"));
+    log_capture_stop();
+
+    TEST_ASSERT_FALSE_MESSAGE(log_contains("unknown token"),
+                              "a legitimately zero-valued token was reported as unknown");
+
+    /* A non-zero token next to a zero-valued one still resolves normally. */
+    log_capture_start();
+    char mixed[] = "style_radius-main-pressed";
+    TEST_ASSERT_EQUAL_STRING("style_radius", lv_xml_style_string_process(mixed, &sel));
+    log_capture_stop();
+    TEST_ASSERT_EQUAL_UINT32((uint32_t)(LV_PART_MAIN | LV_STATE_PRESSED), (uint32_t)sel);
+    TEST_ASSERT_FALSE(log_contains("unknown token"));
 }
 
 /*===========================================================================
@@ -355,8 +401,8 @@ static void test_style_string_process_silently_swallows_an_unknown_selector_toke
 
 /**
  * `parts="main,indicator,knob"` on a single element must apply the style to
- * every named part and to no other. `<style>` itself has no `parts` support
- * (see the pin below), so the multi-part form lives on `bind_style`.
+ * every named part and to no other. `<style>` supports `parts` too (see below);
+ * this one exercises the `bind_style` form.
  */
 static const char * STYLE_PARTS_XML =
     "<component>"
@@ -396,16 +442,17 @@ static void test_parts_attribute_applies_one_style_to_every_named_part(void)
 }
 
 /**
- * PINS CURRENT BEHAVIOUR - suspected bug: `parts="..."` is honoured by
- * <bind_style>, <bind_style_if_*> and <bind_style_if>, but NOT by the plain
- * <style> element. lv_obj_xml_style_apply() only reads `selector`, so
- * `<style name="x" parts="indicator,knob"/>` silently applies x to LV_PART_MAIN
- * and to nothing else. The attribute looks supported because three of its four
- * siblings support it.
+ * The plain <style> element honours `parts="..."` too.
+ *
+ * lv_obj_xml_style_apply() used to read only `selector`, so
+ * `<style name="x" parts="indicator,knob"/>` applied x to LV_PART_MAIN and to
+ * nothing else - silently, and while three of its four siblings
+ * (<bind_style>, <bind_style_if_*>, <bind_style_if>) did support it, which is
+ * exactly what made it look supported.
  */
-static void test_plain_style_element_silently_ignores_the_parts_attribute(void)
+static void test_plain_style_element_honours_the_parts_attribute(void)
 {
-    ASSERT_XML_REGISTERS("style_parts_ignored",
+    ASSERT_XML_REGISTERS("style_parts_plain",
                          "<component>"
                          "  <styles>"
                          "    <style name=\"tri\" pad_top=\"23\"/>"
@@ -417,16 +464,86 @@ static void test_plain_style_element_silently_ignores_the_parts_attribute(void)
                          "  </view>"
                          "</component>");
 
-    lv_obj_t * root = XML_CREATE(helix_test_env_screen(), "style_parts_ignored", NULL);
+    lv_obj_t * root = XML_CREATE(helix_test_env_screen(), "style_parts_plain", NULL);
     helix_test_pump(30);
 
     lv_obj_t * sl = ASSERT_NAMED(root, "sl");
 
-    /* The parts named in the XML do NOT get the style ... */
-    ASSERT_STYLE_INT_NOT(sl, LV_STYLE_PAD_TOP, LV_PART_INDICATOR, 23);
-    ASSERT_STYLE_INT_NOT(sl, LV_STYLE_PAD_TOP, LV_PART_KNOB, 23);
-    /* ... and LV_PART_MAIN, which the XML did not name, gets it instead. */
-    ASSERT_STYLE_INT(sl, LV_STYLE_PAD_TOP, LV_PART_MAIN, 23);
+    /* Each named part gets it, asserted independently. */
+    ASSERT_STYLE_INT(sl, LV_STYLE_PAD_TOP, LV_PART_INDICATOR, 23);
+    ASSERT_STYLE_INT(sl, LV_STYLE_PAD_TOP, LV_PART_KNOB, 23);
+    /* LV_PART_MAIN was NOT named, so it must not receive it - that is what
+     * proves the list replaced the default selector rather than adding to it.
+     * pad_top is not inheritable, so nothing can leak in from elsewhere. */
+    ASSERT_STYLE_INT_NOT(sl, LV_STYLE_PAD_TOP, LV_PART_MAIN, 23);
+}
+
+/**
+ * `parts=` composes with `selector=` on the plain element the same way it does
+ * on <bind_style>: the state bits from `selector` ride along on every part.
+ */
+static void test_plain_style_parts_carry_the_state_bits_from_the_selector_attribute(void)
+{
+    ASSERT_XML_REGISTERS("style_parts_state",
+                         "<component>"
+                         "  <styles>"
+                         "    <style name=\"tri\" pad_top=\"29\"/>"
+                         "  </styles>"
+                         "  <view extends=\"lv_obj\" name=\"ps_root\">"
+                         "    <lv_slider name=\"sl\">"
+                         "      <style name=\"tri\" selector=\"pressed\" parts=\"indicator,knob\"/>"
+                         "    </lv_slider>"
+                         "  </view>"
+                         "</component>");
+
+    lv_obj_t * root = XML_CREATE(helix_test_env_screen(), "style_parts_state", NULL);
+    helix_test_pump(30);
+
+    lv_obj_t * sl = ASSERT_NAMED(root, "sl");
+
+    /* Not pressed: the style must not be in effect anywhere. */
+    ASSERT_STYLE_INT_NOT(sl, LV_STYLE_PAD_TOP, LV_PART_INDICATOR, 29);
+    ASSERT_STYLE_INT_NOT(sl, LV_STYLE_PAD_TOP, LV_PART_KNOB, 29);
+
+    lv_obj_add_state(sl, LV_STATE_PRESSED);
+    helix_test_pump(30);
+
+    ASSERT_STYLE_INT(sl, LV_STYLE_PAD_TOP, LV_PART_INDICATOR, 29);
+    ASSERT_STYLE_INT(sl, LV_STYLE_PAD_TOP, LV_PART_KNOB, 29);
+    ASSERT_STYLE_INT_NOT(sl, LV_STYLE_PAD_TOP, LV_PART_MAIN, 29);
+}
+
+/**
+ * No `parts=` at all must still behave exactly as before - `selector=` alone,
+ * and the LV_PART_MAIN default when neither is given.
+ */
+static void test_plain_style_without_parts_still_uses_the_selector_alone(void)
+{
+    ASSERT_XML_REGISTERS("style_no_parts",
+                         "<component>"
+                         "  <styles>"
+                         "    <style name=\"tri\" pad_top=\"31\"/>"
+                         "  </styles>"
+                         "  <view extends=\"lv_obj\" name=\"np_root\">"
+                         "    <lv_slider name=\"sl_plain\">"
+                         "      <style name=\"tri\"/>"
+                         "    </lv_slider>"
+                         "    <lv_slider name=\"sl_sel\">"
+                         "      <style name=\"tri\" selector=\"knob\"/>"
+                         "    </lv_slider>"
+                         "  </view>"
+                         "</component>");
+
+    lv_obj_t * root = XML_CREATE(helix_test_env_screen(), "style_no_parts", NULL);
+    helix_test_pump(30);
+
+    lv_obj_t * plain = ASSERT_NAMED(root, "sl_plain");
+    ASSERT_STYLE_INT(plain, LV_STYLE_PAD_TOP, LV_PART_MAIN, 31);
+    ASSERT_STYLE_INT_NOT(plain, LV_STYLE_PAD_TOP, LV_PART_KNOB, 31);
+
+    lv_obj_t * sel = ASSERT_NAMED(root, "sl_sel");
+    ASSERT_STYLE_INT(sel, LV_STYLE_PAD_TOP, LV_PART_KNOB, 31);
+    ASSERT_STYLE_INT_NOT(sel, LV_STYLE_PAD_TOP, LV_PART_MAIN, 31);
 }
 
 /** The `selector=` attribute form, targeting a part. */
@@ -924,10 +1041,13 @@ int main(void)
     RUN_TEST(test_get_style_by_name_falls_back_to_the_globals_scope);
 
     RUN_TEST(test_style_string_process_splits_the_name_from_state_and_part_tokens);
-    RUN_TEST(test_style_string_process_silently_swallows_an_unknown_selector_token);
+    RUN_TEST(test_style_string_process_reports_an_unknown_selector_token);
+    RUN_TEST(test_the_zero_valued_tokens_default_and_main_do_not_warn);
 
     RUN_TEST(test_parts_attribute_applies_one_style_to_every_named_part);
-    RUN_TEST(test_plain_style_element_silently_ignores_the_parts_attribute);
+    RUN_TEST(test_plain_style_element_honours_the_parts_attribute);
+    RUN_TEST(test_plain_style_parts_carry_the_state_bits_from_the_selector_attribute);
+    RUN_TEST(test_plain_style_without_parts_still_uses_the_selector_alone);
     RUN_TEST(test_selector_attribute_scopes_a_style_to_a_single_part);
     RUN_TEST(test_state_qualified_style_applies_only_in_that_state);
     RUN_TEST(test_inline_style_attribute_with_a_state_suffix_applies_only_in_that_state);

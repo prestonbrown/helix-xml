@@ -55,6 +55,8 @@ static void delete_on_screen_unloaded_event_cb(lv_event_t * e);
 static void free_screen_create_user_data_on_delete_event_cb(lv_event_t * e);
 static void play_anim_on_trigger_event_cb(lv_event_t * e);
 static void free_play_anim_user_data_on_delete_event_cb(lv_event_t * e);
+static size_t lv_xml_parse_parts_attr(const char * parts_str, lv_style_selector_t state_bits,
+                                      lv_style_selector_t * out, size_t max);
 
 /**********************
  *  STATIC VARIABLES
@@ -122,6 +124,10 @@ void lv_xml_obj_apply(lv_xml_parser_state_t * state, const char ** attrs)
                     lv_obj_add_flag(item, LV_OBJ_FLAG_HIDDEN);
                 }
             }
+            else {
+                LV_LOG_WARN("hidden_if_prop_eq=\"%s\" has no `|` separator so it can never match; "
+                            "the expected form is \"$prop|ref_value\"", value);
+            }
         }
         else if(lv_streq("hidden_if_prop_not_eq", name)) {
             const char * sep = lv_strchr(value, '|');
@@ -133,6 +139,10 @@ void lv_xml_obj_apply(lv_xml_parser_state_t * state, const char ** attrs)
                 if(!eq) {
                     lv_obj_add_flag(item, LV_OBJ_FLAG_HIDDEN);
                 }
+            }
+            else {
+                LV_LOG_WARN("hidden_if_prop_not_eq=\"%s\" has no `|` separator so it can never match; "
+                            "the expected form is \"$prop|ref_value\"", value);
             }
         }
         else if(lv_streq("hidden_if_empty", name)) {
@@ -237,7 +247,23 @@ void lv_obj_xml_style_apply(lv_xml_parser_state_t * state, const char ** attrs)
     lv_style_selector_t selector = lv_xml_style_selector_text_to_enum(selector_str);
 
     void * item = lv_xml_state_get_parent(state);
-    lv_obj_add_style(item, &xml_style->style, selector);
+
+    /* `parts="main,indicator,knob"` — same attribute <bind_style>,
+     * <bind_style_if_*> and <bind_style_if> accept. Plain <style> used to read
+     * only `selector`, so a documented `parts=` list silently applied the style
+     * to LV_PART_MAIN and to nothing else. State bits from `selector` live in
+     * the low 16 and are preserved across each part. */
+    const char * parts_str = lv_xml_get_value_of(attrs, "parts");
+    lv_style_selector_t parts[8];
+    size_t n_parts = lv_xml_parse_parts_attr(parts_str, selector & 0xFFFF, parts, 8);
+    if(n_parts > 0) {
+        for(size_t i = 0; i < n_parts; i++) {
+            lv_obj_add_style(item, &xml_style->style, parts[i]);
+        }
+    }
+    else {
+        lv_obj_add_style(item, &xml_style->style, selector);
+    }
 }
 
 void * lv_obj_xml_remove_style_create(lv_xml_parser_state_t * state, const char ** attrs)

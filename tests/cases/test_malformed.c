@@ -488,18 +488,17 @@ static void test_stray_angle_brackets_in_attribute_values(void)
 
 /**
  * An unknown widget name registers fine (nothing looks at tag names until
- * creation) and then logs loudly at creation - and the elements AFTER it end
- * up in the wrong place.
+ * creation), logs loudly at creation, produces no object of its own - and
+ * leaves everything AFTER it exactly where it was written.
  *
- * The mis-parenting is the documented consequence in lv_xml.c
- * view_start_element_handler: the unknown start tag pushes nothing onto the
- * parent stack, but its closing tag still pops a real entry, so every following
- * sibling is parented one level too high. Here the sibling lands on the SCREEN
- * instead of inside the component. That is a nasty, quiet failure mode in a
- * real UI (widgets bleeding across panels at 0,0), so it is pinned exactly
- * rather than left as "logged something".
+ * That last part is the whole point. The unknown start tag creates nothing, but
+ * its close tag is still delivered and the end handler pops unconditionally, so
+ * the start has to push a balancing frame. Without it the stack lost a level per
+ * unknown element and the following sibling landed on the SCREEN instead of
+ * inside the component - a quiet, nasty failure mode in a real UI (widgets
+ * bleeding across panels at 0,0) from nothing worse than a stale binary.
  */
-static void test_unknown_widget_name_warns_and_misparents_following_siblings(void)
+static void test_unknown_widget_name_warns_but_keeps_following_siblings_in_place(void)
 {
     lv_obj_t * screen = helix_test_env_screen();
 
@@ -525,18 +524,15 @@ static void test_unknown_widget_name_warns_and_misparents_following_siblings(voi
     /* The unknown element itself produced nothing. */
     ASSERT_NO_NAMED(root, "ghost");
 
-    /* PINS CURRENT BEHAVIOUR - suspected bug: the unknown tag's closing tag pops
-     * a real parent, so the following sibling is parented to the SCREEN rather
-     * than to the component root. The engine logs it but builds the wrong tree
-     * instead of skipping the subtree or aborting the parse. */
-    ASSERT_NO_NAMED(root, "after_the_ghost");
-    lv_obj_t * stray = lv_obj_find_by_name(screen, "after_the_ghost");
-    TEST_ASSERT_NOT_NULL_MESSAGE(stray, "the sibling after the unknown tag vanished entirely");
-    TEST_ASSERT_EQUAL_PTR_MESSAGE(screen, lv_obj_get_parent(stray),
-                                  "the sibling after the unknown tag is no longer mis-parented "
-                                  "onto the screen - behaviour changed, re-read this test");
-    ASSERT_CHILD_COUNT(root, 0);
-    ASSERT_CHILD_COUNT(screen, 2);
+    /* ...and the sibling written after it is inside the component, not adrift on
+     * the screen. */
+    lv_obj_t * after = ASSERT_NAMED(root, "after_the_ghost");
+    TEST_ASSERT_EQUAL_PTR_MESSAGE(root, lv_obj_get_parent(after),
+                                  "the sibling after the unknown tag is mis-parented - the "
+                                  "unknown tag's open/close are unbalanced again");
+    ASSERT_LABEL_TEXT(after, "A");
+    ASSERT_CHILD_COUNT(root, 1);
+    ASSERT_CHILD_COUNT(screen, 1);
 
     assert_engine_still_works("unknown widget name");
 }
@@ -1086,30 +1082,22 @@ static void test_oversized_values_and_identifiers_stay_usable(void)
  *--------------------------------------------------------------------------*/
 
 /**
- * A literal `</view>` inside a comment or a CDATA section truncates the stored
- * view, so the component registers successfully and then fails on EVERY create.
+ * A literal `</view>` inside a comment, a CDATA section or a processing
+ * instruction is NOT the closing tag, and the view body must not be cut there.
  *
- * PINS CURRENT BEHAVIOUR - suspected bug: extract_view_content() in
- * lv_xml_component.c finds the view body with strstr("</view>"), which is not
- * XML-aware. The document is well-formed - expat accepts it, so registration
- * returns OK - but the substring it stores as `scope->view_def` is cut at the
- * first literal `</view>` anywhere in the file, including inside a comment.
- * The stored fragment is then unparseable, so creation warns and returns NULL
- * every single time. A commented-out block of XML is an entirely ordinary
- * thing to have in a layout file.
- *
- * Doubles as the guard for the failed-create cleanup: a view parse that dies
- * partway has already built widgets onto the caller's parent, and the caller
- * gets NULL back, so it has no handle with which to clean them up. A failing
- * hot reload used to accumulate orphaned subtrees on the live screen. The error
- * path now destroys exactly what it built - and nothing the caller already had.
+ * extract_view_content() used to locate the body with strstr("</view>"), which
+ * is not XML-aware. The document is well-formed - expat accepts it, so
+ * registration returned OK - but the substring stored as `scope->view_def` was
+ * cut at the first literal `</view>` anywhere in the file, comments included.
+ * The stored fragment was then unparseable, so creation warned and returned NULL
+ * every single time, forever. Commenting out a block of a layout file is an
+ * entirely ordinary thing to do.
  */
-static void test_literal_view_close_inside_a_comment_breaks_creation(void)
+static void test_a_view_close_inside_a_comment_or_cdata_is_not_the_closing_tag(void)
 {
     static const struct {
         const char * desc;
         const char * xml;
-        const char * expect_log;
     } rows[] = {
         {
             "</view> inside a comment",
@@ -1117,15 +1105,32 @@ static void test_literal_view_close_inside_a_comment_breaks_creation(void)
             "<lv_label name=\"before\" text=\"B\"/>"
             "<!-- </view> -->"
             "<lv_label name=\"after\" text=\"A\"/>"
-            "</view></component>",
-            "unclosed token"
+            "</view></component>"
+        },
+        {
+            "a whole commented-out block containing <view> and </view>",
+            "<component>"
+            "<!-- <view extends=\"lv_obj\" name=\"old\"><lv_label name=\"dead\"/></view> -->"
+            "<view extends=\"lv_obj\" name=\"r\">"
+            "<lv_label name=\"before\" text=\"B\"/>"
+            "<lv_label name=\"after\" text=\"A\"/>"
+            "</view></component>"
         },
         {
             "</view> inside a CDATA section",
             "<component><view extends=\"lv_obj\" name=\"r\">"
-            "<lv_label name=\"before\"><![CDATA[</view>]]></lv_label>"
-            "</view></component>",
-            "unclosed CDATA section"
+            "<lv_label name=\"before\" text=\"B\"/>"
+            "<lv_obj name=\"holder\"><![CDATA[</view>]]></lv_obj>"
+            "<lv_label name=\"after\" text=\"A\"/>"
+            "</view></component>"
+        },
+        {
+            "</view> inside a processing instruction",
+            "<component><view extends=\"lv_obj\" name=\"r\">"
+            "<lv_label name=\"before\" text=\"B\"/>"
+            "<?helix </view> ?>"
+            "<lv_label name=\"after\" text=\"A\"/>"
+            "</view></component>"
         },
     };
 
@@ -1135,56 +1140,95 @@ static void test_literal_view_close_inside_a_comment_breaks_creation(void)
         lv_obj_clean(screen);
         lv_xml_component_unregister(SUBJECT_NAME);
 
-        /* A pre-existing child of the caller's parent. The failure path has to
-         * tell "what this parse built" from "what the caller already had", so
-         * this must still be standing afterwards. */
-        lv_obj_t * bystander = lv_obj_create(screen);
-        lv_obj_set_name(bystander, "bystander");
-
         log_capture_start();
         lv_result_t res = lv_xml_register_component_from_data(SUBJECT_NAME, rows[i].xml);
         lv_obj_t * root = (res == LV_RESULT_OK) ? lv_xml_create(screen, SUBJECT_NAME, NULL) : NULL;
         helix_test_pump(20);
         log_capture_stop();
 
-        /* Well-formed to expat, so registration succeeds... */
         TEST_ASSERT_EQUAL_INT_MESSAGE(
             (int)LV_RESULT_OK, (int)res,
             helix_xml_assert_msgf("\"%s\": the document is well-formed XML but registration "
                                   "rejected it", rows[i].desc));
-        /* ...and then creation fails, every time, on the truncated view body. */
-        TEST_ASSERT_NULL_MESSAGE(
+        TEST_ASSERT_NOT_NULL_MESSAGE(
             root,
-            helix_xml_assert_msgf("\"%s\": creation now succeeds - extract_view_content() may have "
-                                  "been made XML-aware; re-read this test", rows[i].desc));
-        TEST_ASSERT_TRUE_MESSAGE(
-            log_contains(rows[i].expect_log),
-            helix_xml_assert_msgf("\"%s\": expected a log containing \"%s\", got: %.400s",
-                                  rows[i].desc, rows[i].expect_log, g_log_buf));
-        TEST_ASSERT_TRUE_MESSAGE(
-            log_contains("Couldn't create component"),
-            helix_xml_assert_msgf("\"%s\": the failed create was not reported to the caller's "
-                                  "log; got: %.400s", rows[i].desc, g_log_buf));
+            helix_xml_assert_msgf("\"%s\": creation failed - the view body was cut at a "
+                                  "</view> that is not the closing tag; log: %.400s",
+                                  rows[i].desc, g_log_buf));
 
-        /* No orphan. Creation returned NULL, so the partially built subtree must
-         * be gone: the caller has no handle to it and could never clean it up. */
-        TEST_ASSERT_NULL_MESSAGE(
-            lv_obj_find_by_name(screen, "before"),
-            helix_xml_assert_msgf("\"%s\": the partially built subtree is still orphaned onto "
-                                  "the caller's parent after a failed create", rows[i].desc));
-        /* ...and the caller's own child is untouched: exactly the bystander is left. */
-        TEST_ASSERT_EQUAL_UINT32_MESSAGE(
-            1u, lv_obj_get_child_count(screen),
-            helix_xml_assert_msgf("\"%s\": after a failed create the screen holds %" LV_PRIu32
-                                  " object(s); expected only the bystander", rows[i].desc,
-                                  lv_obj_get_child_count(screen)));
-        TEST_ASSERT_EQUAL_PTR_MESSAGE(
-            bystander, lv_obj_get_child(screen, 0),
-            helix_xml_assert_msgf("\"%s\": the failed-create cleanup destroyed a child the caller "
-                                  "already had", rows[i].desc));
+        /* The whole body survived: everything written after the decoy is there. */
+        TEST_ASSERT_NOT_NULL_MESSAGE(
+            lv_obj_find_by_name(root, "before"),
+            helix_xml_assert_msgf("\"%s\": the element before the decoy is missing", rows[i].desc));
+        TEST_ASSERT_NOT_NULL_MESSAGE(
+            lv_obj_find_by_name(root, "after"),
+            helix_xml_assert_msgf("\"%s\": the element AFTER the decoy is missing - the view "
+                                  "body was truncated there", rows[i].desc));
+        /* A commented-out view is not the view. */
+        ASSERT_NO_NAMED(root, "dead");
 
         assert_engine_still_works(rows[i].desc);
     }
+}
+
+/**
+ * The failed-create cleanup, which the truncated-view case above used to be the
+ * only route to. A view body that parses at registration but not on its own -
+ * here through an entity declared in the document's internal DTD subset, which
+ * the stored `view_def` fragment does not carry - dies partway through
+ * lv_xml_create with widgets already built onto the caller's parent. The caller
+ * gets NULL back and has no handle to clean them up, so the error path must
+ * destroy exactly what it built and nothing the caller already had. A failing
+ * hot reload used to accumulate orphaned subtrees on the live screen.
+ */
+static void test_a_view_that_fails_to_parse_leaves_no_orphans_on_the_caller(void)
+{
+    lv_obj_t * screen = helix_test_env_screen();
+    lv_obj_clean(screen);
+    lv_xml_component_unregister(SUBJECT_NAME);
+
+    /* A pre-existing child of the caller's parent. The failure path has to tell
+     * "what this parse built" from "what the caller already had", so this must
+     * still be standing afterwards. */
+    lv_obj_t * bystander = lv_obj_create(screen);
+    lv_obj_set_name(bystander, "bystander");
+
+    log_capture_start();
+    lv_result_t res = lv_xml_register_component_from_data(
+                          SUBJECT_NAME,
+                          "<!DOCTYPE component [<!ENTITY greeting \"Hello\">]>"
+                          "<component><view extends=\"lv_obj\" name=\"r\">"
+                          "<lv_label name=\"before\" text=\"B\"/>"
+                          "<lv_label name=\"boom\" text=\"&greeting;\"/>"
+                          "</view></component>");
+    lv_obj_t * root = (res == LV_RESULT_OK) ? lv_xml_create(screen, SUBJECT_NAME, NULL) : NULL;
+    helix_test_pump(20);
+    log_capture_stop();
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE((int)LV_RESULT_OK, (int)res,
+                                  "the document is well-formed XML but registration rejected it");
+    TEST_ASSERT_NULL_MESSAGE(root, "the view fragment parsed cleanly on its own - this test no "
+                             "longer reaches the failed-create path, find another trigger");
+    TEST_ASSERT_TRUE_MESSAGE(
+        log_contains("Couldn't create component"),
+        helix_xml_assert_msgf("the failed create was not reported to the caller's log; got: %.400s",
+                              g_log_buf));
+
+    /* No orphan: the partially built subtree must be gone. */
+    TEST_ASSERT_NULL_MESSAGE(
+        lv_obj_find_by_name(screen, "before"),
+        "the partially built subtree is still orphaned onto the caller's parent");
+    /* ...and the caller's own child is untouched: exactly the bystander is left. */
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(
+        1u, lv_obj_get_child_count(screen),
+        helix_xml_assert_msgf("after a failed create the screen holds %" LV_PRIu32
+                              " object(s); expected only the bystander",
+                              lv_obj_get_child_count(screen)));
+    TEST_ASSERT_EQUAL_PTR_MESSAGE(
+        bystander, lv_obj_get_child(screen, 0),
+        "the failed-create cleanup destroyed a child the caller already had");
+
+    assert_engine_still_works("view fragment that fails to parse");
 }
 
 /*---------------------------------------------------------------------------
@@ -1251,7 +1295,7 @@ int main(void)
     RUN_TEST(test_truncated_document_warns_and_leaves_the_parser_usable);
     RUN_TEST(test_malformed_attribute_syntax_warns_and_leaves_the_parser_usable);
     RUN_TEST(test_stray_angle_brackets_in_attribute_values);
-    RUN_TEST(test_unknown_widget_name_warns_and_misparents_following_siblings);
+    RUN_TEST(test_unknown_widget_name_warns_but_keeps_following_siblings_in_place);
     RUN_TEST(test_unknown_attribute_on_a_known_widget_is_silently_ignored);
     RUN_TEST(test_unknown_enum_value_warns_and_the_widget_is_still_built);
     RUN_TEST(test_contentless_documents_warn_and_leave_the_parser_usable);
@@ -1261,7 +1305,8 @@ int main(void)
     RUN_TEST(test_deeply_nested_elements_have_no_engine_limit_and_stay_usable);
     RUN_TEST(test_duplicate_sibling_names_are_accepted_and_the_first_one_wins);
     RUN_TEST(test_oversized_values_and_identifiers_stay_usable);
-    RUN_TEST(test_literal_view_close_inside_a_comment_breaks_creation);
+    RUN_TEST(test_a_view_close_inside_a_comment_or_cdata_is_not_the_closing_tag);
+    RUN_TEST(test_a_view_that_fails_to_parse_leaves_no_orphans_on_the_caller);
     RUN_TEST(test_structural_elements_missing_attributes_warn_and_expand_to_nothing);
 
     return UNITY_END();

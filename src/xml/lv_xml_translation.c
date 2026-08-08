@@ -69,10 +69,13 @@ lv_result_t lv_xml_register_translation_from_file(const char * path)
         return LV_RESULT_INVALID;
     }
 
-    /* Read the file content  */
-    uint32_t rn;
-    lv_fs_read(&f, xml_buf, file_size, &rn);
-    if(rn != file_size) {
+    /* Read the file content. The result code matters as much as the count: a
+     * driver that fails the read may leave `rn` untouched, and an lv_malloc'd
+     * buffer is not zeroed, so a count-only check can accept uninitialised
+     * memory and hand it to the parser. */
+    uint32_t rn = 0;
+    fs_res = lv_fs_read(&f, xml_buf, file_size, &rn);
+    if(fs_res != LV_FS_RES_OK || rn != file_size) {
         LV_LOG_WARN("Couldn't read %s fully", path);
         lv_free(xml_buf);
         lv_fs_close(&f);
@@ -94,13 +97,43 @@ lv_result_t lv_xml_register_translation_from_file(const char * path)
 
 lv_result_t lv_xml_register_translation_from_data(const char * xml_def)
 {
+    /* Check the document is well-formed BEFORE creating the pack.
+     *
+     * lv_translation has no API to remove a pack, so the old order - add the
+     * pack, then parse - left an empty orphan in packs_ll for every malformed
+     * registration, and lv_translation_get() walked past it on every lookup for
+     * the rest of the process. Validating first means nothing is created unless
+     * the parse that follows is guaranteed to run to completion. */
+    XML_Parser check = XML_ParserCreate(NULL);
+    if(check == NULL) {
+        LV_LOG_ERROR("Couldn't create the XML parser");
+        return LV_RESULT_INVALID;
+    }
+    if(XML_Parse(check, xml_def, lv_strlen(xml_def), XML_TRUE) == XML_STATUS_ERROR) {
+        LV_LOG_ERROR("XML parsing error: %s on line %lu",
+                     XML_ErrorString(XML_GetErrorCode(check)),
+                     (unsigned long)XML_GetCurrentLineNumber(check));
+        XML_ParserFree(check);
+        return LV_RESULT_INVALID;
+    }
+    XML_ParserFree(check);
+
     lv_translation_pack_t * pack = lv_translation_add_dynamic();
+    if(pack == NULL) {
+        LV_LOG_ERROR("Couldn't create the translation pack");
+        return LV_RESULT_INVALID;
+    }
 
     /* Parse the XML to extract metadata */
     XML_Parser parser = XML_ParserCreate(NULL);
+    if(parser == NULL) {
+        LV_LOG_ERROR("Couldn't create the XML parser");
+        return LV_RESULT_INVALID;
+    }
     XML_SetUserData(parser, pack);
     XML_SetElementHandler(parser, start_handler, end_handler);
 
+    /* Cannot fail: the identical input already parsed above. */
     if(XML_Parse(parser, xml_def, lv_strlen(xml_def), XML_TRUE) == XML_STATUS_ERROR) {
         LV_LOG_ERROR("XML parsing error: %s on line %lu",
                      XML_ErrorString(XML_GetErrorCode(parser)),

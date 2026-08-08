@@ -25,6 +25,20 @@
  *      TYPEDEFS
  **********************/
 
+/**
+ * expat's start handler cannot influence XML_Parse()'s return value, so every
+ * dispatch failure used to be a bare LV_LOG_WARN and the caller saw
+ * LV_RESULT_OK for a snippet that updated nothing. The handler now records the
+ * failure here instead.
+ *
+ * `state` is first so `&ctx->state` and `ctx` are interchangeable for the
+ * widget apply_cb, which only ever sees the parser state.
+ */
+typedef struct {
+    lv_xml_parser_state_t state;
+    bool failed;
+} update_ctx_t;
+
 /**********************
  *  STATIC PROTOTYPES
  **********************/
@@ -47,12 +61,13 @@ static void end_handler(void * user_data, const char * name);
 lv_result_t lv_xml_update_from_data(const char * xml_def)
 {
     /*Create a dummy parser state*/
-    lv_xml_parser_state_t state;
-    lv_xml_parser_state_init(&state);
+    update_ctx_t ctx;
+    lv_xml_parser_state_init(&ctx.state);
+    ctx.failed = false;
 
     /* Parse the XML to extract metadata */
     XML_Parser parser = XML_ParserCreate(NULL);
-    XML_SetUserData(parser, &state);
+    XML_SetUserData(parser, &ctx);
     XML_SetElementHandler(parser, start_handler, end_handler);
 
     if(XML_Parse(parser, xml_def, lv_strlen(xml_def), XML_TRUE) == XML_STATUS_ERROR) {
@@ -63,7 +78,10 @@ lv_result_t lv_xml_update_from_data(const char * xml_def)
         return LV_RESULT_INVALID;
     }
     XML_ParserFree(parser);
-    return LV_RESULT_OK;
+
+    /* At least one element could not be dispatched: wrong tag prefix, unknown
+     * widget type, no `name`, or no widget by that name on the active screen. */
+    return ctx.failed ? LV_RESULT_INVALID : LV_RESULT_OK;
 }
 
 /**********************
@@ -72,17 +90,26 @@ lv_result_t lv_xml_update_from_data(const char * xml_def)
 
 static void start_handler(void * user_data, const char * name, const char ** attrs)
 {
-    lv_xml_parser_state_t * state = (lv_xml_parser_state_t *)user_data;
+    update_ctx_t * ctx = (update_ctx_t *)user_data;
+    lv_xml_parser_state_t * state = &ctx->state;
+
+    /* XML allows exactly one root element, so a snippet carrying more than one
+     * update needs a container. `<updates>` is it: not an update itself, and
+     * not a failure either. Before the return value carried dispatch failures
+     * this fell into the prefix check below and logged a spurious warning. */
+    if(lv_streq(name, "updates")) return;
 
     size_t update_len = lv_strlen("update-");
     size_t name_len = lv_strlen(name);
     if(name_len < update_len) {
         LV_LOG_WARN("%s doesn't start with `update-`", name);
+        ctx->failed = true;
         return;
     }
 
     if(lv_memcmp(name, "update-", update_len)) {
         LV_LOG_WARN("%s doesn't start with `update-`", name);
+        ctx->failed = true;
         return;
     }
 
@@ -92,18 +119,21 @@ static void start_handler(void * user_data, const char * name, const char ** att
     lv_widget_processor_t * proc = lv_xml_widget_get_processor(name);
     if(proc == NULL) {
         LV_LOG_WARN("%s is not a known widget", name);
+        ctx->failed = true;
         return;
     }
 
     const char * widget_name = lv_xml_get_value_of(attrs, "name");
     if(widget_name == NULL) {
         LV_LOG_WARN("There is no name property");
+        ctx->failed = true;
         return;
     }
 
     lv_obj_t * obj = lv_obj_get_child_by_name(lv_screen_active(), widget_name);
     if(obj == NULL) {
         LV_LOG_WARN("No widget is found with the name of `%s`", widget_name);
+        ctx->failed = true;
         return;
     }
 

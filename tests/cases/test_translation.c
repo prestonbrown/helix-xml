@@ -63,6 +63,8 @@
 #if LV_USE_TRANSLATION
 
 #include <others/translation/lv_translation.h>
+#include <core/lv_global.h>
+#include <misc/lv_ll.h>
 
 #include "xml/lv_xml_translation.h"
 
@@ -107,6 +109,18 @@ static const char * PACK_PARTIAL =
 /*---------------------------------------------------------------------------
  * Helpers
  *--------------------------------------------------------------------------*/
+
+/**
+ * How many translation packs are currently registered.
+ *
+ * There is no public accessor, and an EMPTY pack has no behavioural signature
+ * at all, so the orphan-pack test below reaches into the global list directly.
+ * That is the only way to see the leak it guards.
+ */
+static uint32_t pack_count(void)
+{
+    return lv_ll_get_len(&LV_GLOBAL_DEFAULT()->translation_packs_ll);
+}
 
 static void register_pack(const char * xml)
 {
@@ -182,6 +196,145 @@ static void test_malformed_translation_data_is_rejected(void)
         LV_RESULT_INVALID,
         (int)lv_xml_register_translation_from_data("<translations languages=\"en\"><translation tag=\"x\" en=\"X\"></translations>"),
         "malformed translation data reported success");
+}
+
+/**
+ * A rejected registration must not leave a pack behind.
+ *
+ * lv_xml_register_translation_from_data() used to call
+ * lv_translation_add_dynamic() BEFORE parsing and had no way to undo it -
+ * lv_translation has no remove-a-pack API - so every malformed registration
+ * left an empty orphan in packs_ll that lv_translation_get() then walked past
+ * on every single lookup for the rest of the process. The document is now
+ * checked for well-formedness first and the pack is created only if that pass
+ * succeeds.
+ *
+ * The pack count is the assertion because an EMPTY pack has no other
+ * observable: it contributes no languages and no tags, so every lookup answers
+ * identically with or without it. That is precisely what made the leak silent.
+ */
+static void test_a_rejected_registration_leaves_no_orphan_pack(void)
+{
+    uint32_t before = pack_count();
+
+    TEST_ASSERT_EQUAL_INT(LV_RESULT_INVALID,
+                          (int)lv_xml_register_translation_from_data(
+                              "<translations languages=\"en\">"
+                              "  <translation tag=\"x\" en=\"X\"/>"
+                              "</translations"));
+    TEST_ASSERT_EQUAL_INT(LV_RESULT_INVALID,
+                          (int)lv_xml_register_translation_from_data("not xml at all <<< &"));
+    TEST_ASSERT_EQUAL_INT(LV_RESULT_INVALID,
+                          (int)lv_xml_register_translation_from_file(TRANS_MALFORMED));
+
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(before, pack_count(),
+                                     "a rejected registration left an orphan pack behind");
+
+    /* The control: a GOOD registration must still create exactly one pack, so
+     * the fix cannot be "never create a pack". */
+    register_pack(PACK_COMPLETE);
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(before + 1, pack_count(),
+                                     "a valid registration did not create a pack");
+
+    lv_translation_set_language("en");
+    ASSERT_TR("dog", "Dog");
+}
+
+/*---------------------------------------------------------------------------
+ * A filesystem driver that fails its reads while still reporting a full count
+ *
+ * lv_xml_register_translation_from_file() checked only `rn != file_size` and
+ * threw the lv_fs_read() result away. A driver that fails the read but leaves
+ * the count at the requested size therefore got its garbage buffer parsed as
+ * XML. lv_malloc() does not zero, so "garbage" here is whatever was on the
+ * heap - the real-world version of this is a short/failed read on a flaky SD
+ * card handing the parser uninitialised memory.
+ *
+ * The driver below is the smallest thing that reproduces that: every read
+ * answers LV_FS_RES_HW_ERR and sets *br to the full request.
+ *--------------------------------------------------------------------------*/
+
+#define BADFS_LETTER 'Q'
+
+static void * badfs_open_cb(lv_fs_drv_t * drv, const char * path, lv_fs_mode_t mode)
+{
+    LV_UNUSED(drv);
+    LV_UNUSED(path);
+    LV_UNUSED(mode);
+    static int dummy_handle;
+    return &dummy_handle;
+}
+
+static lv_fs_res_t badfs_close_cb(lv_fs_drv_t * drv, void * file_p)
+{
+    LV_UNUSED(drv);
+    LV_UNUSED(file_p);
+    return LV_FS_RES_OK;
+}
+
+static lv_fs_res_t badfs_read_cb(lv_fs_drv_t * drv, void * file_p, void * buf, uint32_t btr, uint32_t * br)
+{
+    LV_UNUSED(drv);
+    LV_UNUSED(file_p);
+    LV_UNUSED(buf);
+    *br = btr; /* claims a complete read ... */
+    return LV_FS_RES_HW_ERR; /* ... and reports it failed */
+}
+
+static lv_fs_res_t badfs_seek_cb(lv_fs_drv_t * drv, void * file_p, uint32_t pos, lv_fs_whence_t whence)
+{
+    LV_UNUSED(drv);
+    LV_UNUSED(file_p);
+    LV_UNUSED(pos);
+    LV_UNUSED(whence);
+    return LV_FS_RES_OK;
+}
+
+static lv_fs_res_t badfs_tell_cb(lv_fs_drv_t * drv, void * file_p, uint32_t * pos_p)
+{
+    LV_UNUSED(drv);
+    LV_UNUSED(file_p);
+    *pos_p = 64; /* a non-zero "file size" so a buffer is actually allocated */
+    return LV_FS_RES_OK;
+}
+
+static lv_fs_drv_t badfs_drv;
+
+static void badfs_register(void)
+{
+    lv_fs_drv_init(&badfs_drv);
+    badfs_drv.letter = BADFS_LETTER;
+    badfs_drv.open_cb = badfs_open_cb;
+    badfs_drv.close_cb = badfs_close_cb;
+    badfs_drv.read_cb = badfs_read_cb;
+    badfs_drv.seek_cb = badfs_seek_cb;
+    badfs_drv.tell_cb = badfs_tell_cb;
+    lv_fs_drv_register(&badfs_drv);
+}
+
+/**
+ * A failed read is a failed registration, even when the byte count looks right.
+ *
+ * The count-only check accepted this and handed an uninitialised lv_malloc()
+ * buffer to expat. Whether that then "parsed" was up to the heap contents, so
+ * the old code's outcome here was not even deterministic.
+ */
+static void test_a_failed_read_is_rejected_even_when_the_byte_count_matches(void)
+{
+    badfs_register();
+
+    uint32_t before = pack_count();
+
+    log_capture_start();
+    lv_result_t res = lv_xml_register_translation_from_file("Q:anything.xml");
+    log_capture_stop();
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(LV_RESULT_INVALID, (int)res,
+                                  "a read that reported LV_FS_RES_HW_ERR was accepted");
+    TEST_ASSERT_TRUE_MESSAGE(log_contains("Couldn't read"),
+                             "a failed read was not reported");
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(before, pack_count(),
+                                     "a failed read still created a pack");
 }
 
 /*===========================================================================
@@ -423,6 +576,8 @@ int main(void)
     RUN_TEST(test_registering_translations_from_a_missing_file_fails);
     RUN_TEST(test_a_malformed_translation_file_is_rejected);
     RUN_TEST(test_malformed_translation_data_is_rejected);
+    RUN_TEST(test_a_rejected_registration_leaves_no_orphan_pack);
+    RUN_TEST(test_a_failed_read_is_rejected_even_when_the_byte_count_matches);
 
     RUN_TEST(test_switching_language_changes_what_a_tag_resolves_to);
     RUN_TEST(test_an_unknown_tag_resolves_to_the_tag_itself);

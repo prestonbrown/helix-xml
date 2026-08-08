@@ -35,6 +35,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "helpers/helix_log_capture.h"
 #include "helpers/helix_test_env.h"
 #include "helpers/helix_test_pump.h"
 #include "helpers/xml_assert.h"
@@ -261,16 +262,17 @@ static void test_a_prop_pipe_hide_is_decided_once_and_never_reasserted(void)
  *==========================================================================*/
 
 /**
- * PINS CURRENT BEHAVIOUR - suspected bug: a `hidden_if_prop_eq` value with no
- * `|` in it is a silent no-op. lv_strchr() returns NULL, the branch falls
- * through without adding the flag and without any diagnostic, so
- * `hidden_if_prop_eq="$hp"` - the natural thing to write when the reference
- * value is being added later, or when copying the attribute name off
- * `hidden_if_empty` - reads as "hide if hp is set" and does nothing at all.
- * Every other malformed-attribute path in this engine at least LV_LOG_WARNs.
- * Not fixed here: adding the warning is an engine change.
+ * A `hidden_if_prop_eq` value with no `|` in it is a no-op, and now says so.
+ *
+ * lv_strchr() returns NULL, the branch falls through without adding the flag.
+ * That part is correct - there is no reference value to compare against - but
+ * it used to happen in complete silence, so `hidden_if_prop_eq="$hp"` (the
+ * natural thing to write when the reference value is being added later, or when
+ * copying the attribute name off `hidden_if_empty`) read as "hide if hp is set"
+ * and did nothing at all. Every other malformed-attribute path in this engine
+ * at least LV_LOG_WARNs; this one does too now.
  */
-static void test_a_prop_conditional_without_a_pipe_is_a_silent_no_op(void)
+static void test_a_prop_conditional_without_a_pipe_is_a_reported_no_op(void)
 {
     ASSERT_XML_REGISTERS("pc_nopipe_child",
                          "<component>"
@@ -283,10 +285,73 @@ static void test_a_prop_conditional_without_a_pipe_is_a_silent_no_op(void)
                          "</component>");
 
     const char * attrs[] = {"hp", "true", NULL, NULL};
+    log_capture_start();
     lv_obj_t * root = XML_CREATE(helix_test_env_screen(), "pc_nopipe_child", attrs);
     helix_test_pump(30);
+    log_capture_stop();
 
     ASSERT_NO_FLAG(ASSERT_NAMED(root, "target"), LV_OBJ_FLAG_HIDDEN);
+    TEST_ASSERT_TRUE_MESSAGE(log_contains("hidden_if_prop_eq"),
+                             "a pipe-less hidden_if_prop_eq was still a silent no-op");
+    TEST_ASSERT_TRUE_MESSAGE(log_contains("has no `|` separator"),
+                             "the warning did not name the missing separator");
+}
+
+/** The `not_eq` sibling has the same hole and the same warning. */
+static void test_a_prop_not_eq_conditional_without_a_pipe_is_a_reported_no_op(void)
+{
+    ASSERT_XML_REGISTERS("pc_nopipe_ne_child",
+                         "<component>"
+                         "  <api>"
+                         "    <prop name=\"hp\" type=\"string\" default=\"false\"/>"
+                         "  </api>"
+                         "  <view extends=\"lv_obj\" name=\"np_ne_child_root\">"
+                         "    <lv_obj name=\"target\" hidden_if_prop_not_eq=\"$hp\"/>"
+                         "  </view>"
+                         "</component>");
+
+    const char * attrs[] = {"hp", "true", NULL, NULL};
+    log_capture_start();
+    lv_obj_t * root = XML_CREATE(helix_test_env_screen(), "pc_nopipe_ne_child", attrs);
+    helix_test_pump(30);
+    log_capture_stop();
+
+    ASSERT_NO_FLAG(ASSERT_NAMED(root, "target"), LV_OBJ_FLAG_HIDDEN);
+    TEST_ASSERT_TRUE_MESSAGE(log_contains("hidden_if_prop_not_eq"),
+                             "a pipe-less hidden_if_prop_not_eq was still a silent no-op");
+    TEST_ASSERT_TRUE_MESSAGE(log_contains("has no `|` separator"),
+                             "the warning did not name the missing separator");
+}
+
+/**
+ * The complement: a well-formed value must NOT trip the new warning. Without
+ * this, a fix that warned unconditionally would still pass the two above.
+ */
+static void test_a_well_formed_prop_conditional_does_not_warn(void)
+{
+    ASSERT_XML_REGISTERS("pc_quiet_child",
+                         "<component>"
+                         "  <api>"
+                         "    <prop name=\"hp\" type=\"string\" default=\"false\"/>"
+                         "  </api>"
+                         "  <view extends=\"lv_obj\" name=\"quiet_child_root\">"
+                         "    <lv_obj name=\"hit\" hidden_if_prop_eq=\"$hp|true\"/>"
+                         "    <lv_obj name=\"miss\" hidden_if_prop_eq=\"$hp|nope\"/>"
+                         "    <lv_obj name=\"ne\" hidden_if_prop_not_eq=\"$hp|true\"/>"
+                         "  </view>"
+                         "</component>");
+
+    const char * attrs[] = {"hp", "true", NULL, NULL};
+    log_capture_start();
+    lv_obj_t * root = XML_CREATE(helix_test_env_screen(), "pc_quiet_child", attrs);
+    helix_test_pump(30);
+    log_capture_stop();
+
+    ASSERT_FLAG(ASSERT_NAMED(root, "hit"), LV_OBJ_FLAG_HIDDEN);
+    ASSERT_NO_FLAG(ASSERT_NAMED(root, "miss"), LV_OBJ_FLAG_HIDDEN);
+    ASSERT_NO_FLAG(ASSERT_NAMED(root, "ne"), LV_OBJ_FLAG_HIDDEN);
+    TEST_ASSERT_FALSE_MESSAGE(log_contains("has no `|` separator"),
+                              "a well-formed prop conditional was reported as malformed");
 }
 
 /**
@@ -336,7 +401,9 @@ int main(void)
 
     RUN_TEST(test_a_prop_pipe_hide_is_decided_once_and_never_reasserted);
 
-    RUN_TEST(test_a_prop_conditional_without_a_pipe_is_a_silent_no_op);
+    RUN_TEST(test_a_prop_conditional_without_a_pipe_is_a_reported_no_op);
+    RUN_TEST(test_a_prop_not_eq_conditional_without_a_pipe_is_a_reported_no_op);
+    RUN_TEST(test_a_well_formed_prop_conditional_does_not_warn);
     RUN_TEST(test_an_empty_reference_after_the_pipe_compares_against_the_empty_string);
 
     return UNITY_END();

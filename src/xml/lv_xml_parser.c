@@ -105,14 +105,41 @@ void lv_xml_parser_start_section(lv_xml_parser_state_t * state, const char * nam
 
 void lv_xml_parser_end_section(lv_xml_parser_state_t * state, const char * name)
 {
+    /* Every block name lv_xml_parser_start_section() can open must appear here,
+     * or its close tag leaves the section LATCHED: everything between that close
+     * tag and the next block opener is then handed to the wrong element
+     * processor (a stray tag after `</subjects>` reaches process_subject_element
+     * and is warned about as a malformed subject). It self-corrects in practice
+     * only because the next tag is nearly always another opener - which is why
+     * `</api>`, `</fonts>`, `</images>`, `</subjects>`, `</animation>`,
+     * `</timeline>` and `</include_timeline>` were able to go missing.
+     *
+     * `params` used to be in this list with no matching opener, so `</params>`
+     * closed a section it could never have opened - in `<api><params>...`, the
+     * exact document that shape appears in, it dropped the state out of
+     * SECTION_API while `<api>` was still open. `<params>` is not part of the
+     * grammar (`<api>` holds `<prop>` elements), so it is gone from here rather
+     * than added to start_section: the two lists must stay symmetric. */
+    static const char * const block_names[] = {
+        "api",
+        "consts",
+        "gradients",
+        "styles",
+        "images",
+        "fonts",
+        "subjects",
+        "animation",
+        "include_timeline",
+        "timeline",
+        "view",
+    };
 
-    /* Reset context when leaving a block */
-    if(lv_streq(name, "params") ||
-       lv_streq(name, "consts") ||
-       lv_streq(name, "gradients") ||
-       lv_streq(name, "styles") ||
-       lv_streq(name, "view")) {
-        state->section = LV_XML_PARSER_SECTION_NONE;
+    uint32_t i;
+    for(i = 0; i < sizeof(block_names) / sizeof(block_names[0]); i++) {
+        if(lv_streq(name, block_names[i])) {
+            state->section = LV_XML_PARSER_SECTION_NONE;
+            return;
+        }
     }
 
     /*When processing gradient stops, but not a stop was closed got bacg to gradient processing

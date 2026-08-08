@@ -395,15 +395,14 @@ void * lv_xml_create_in_scope(lv_obj_t * parent, lv_xml_component_scope_t * pare
     state.item = state.view;
 
 #if LV_USE_OBJ_NAME
-    /*Set a default indexed name*/
-    if(state.item) {
-        if(state.scope.is_screen) {
-            lv_obj_set_name(state.item, scope->name);
-        }
-        else if(lv_obj_get_name(state.item) == NULL) {
-            char name_buf[128];
-            lv_snprintf(name_buf, sizeof(name_buf), "%s_#", scope->name);
-        }
+    /*A screen is named after its component; there is no instance site to defer
+     *to. Non-screens are deliberately left alone here: both callers of this
+     *function (lv_xml_create() and lv_xml_component_process()) apply the
+     *"<component>_#" default themselves, after the instance-site attributes
+     *have been applied, which is the only point at which "does this object
+     *already have a name?" can be answered correctly.*/
+    if(state.item && state.scope.is_screen) {
+        lv_obj_set_name(state.item, scope->name);
     }
 #endif
 
@@ -451,6 +450,21 @@ void * lv_xml_create(lv_obj_t * parent, const char * name, const char ** attrs)
             return NULL;
         }
         const char * value_of_name = NULL;
+#if LV_USE_OBJ_NAME
+        /*Report an instance-site `name` displacing one the component set on its
+         *own <view> root. Checked HERE, before apply_cb: apply_cb applies the
+         *instance-site name itself and frees the string lv_obj_get_name()
+         *returns, so afterwards the two are indistinguishable.*/
+        {
+            const char * site_name = attrs ? lv_xml_get_value_of(attrs, "name") : NULL;
+            const char * view_name = lv_obj_get_name(item);
+            if(site_name && view_name && !lv_streq(view_name, site_name)) {
+                LV_LOG_WARN("Component '%s' sets name=\"%s\" on its own <view>; "
+                            "the instance-site name=\"%s\" takes precedence",
+                            scope->name, view_name, site_name);
+            }
+        }
+#endif
         if(attrs) {
             lv_xml_parser_state_t state;
             lv_xml_parser_state_init(&state);
@@ -464,14 +478,23 @@ void * lv_xml_create(lv_obj_t * parent, const char * name, const char ** attrs)
             p = lv_xml_widget_get_extended_widget_processor(scope->extends);
             p->apply_cb(&state, attrs);
 #if LV_USE_OBJ_NAME
+            /*The instance site wins over a name the component set on its own
+             *<view> root - the instance is the more specific statement, and
+             *callers rely on being able to name the thing they placed. The
+             *displaced attribute was written on purpose though, so the override
+             *is reported above rather than applied silently.*/
             value_of_name = lv_xml_get_value_of(attrs, "name");
             if(value_of_name) lv_obj_set_name(item, value_of_name);
 #endif
         }
 
-        /*Set a default indexed name for non screens*/
+        /*Set a default indexed name for non screens.
+         *Only for an object that has no name at all: `<view name="...">` on the
+         *component's own root is a deliberate statement and is kept, where it
+         *used to be overwritten by "<component>_#" with no diagnostic. Order of
+         *precedence: instance site > the component's own <view name> > default.*/
 #if LV_USE_OBJ_NAME
-        if(lv_obj_get_parent(item) && value_of_name == NULL) {
+        if(lv_obj_get_parent(item) && value_of_name == NULL && lv_obj_get_name(item) == NULL) {
             char name_buf[128];
             lv_snprintf(name_buf, sizeof(name_buf), "%s_#", scope->name);
             lv_obj_set_name(item, name_buf);
@@ -2284,16 +2307,31 @@ static void view_start_element_handler(void * user_data, const char * name, cons
     /* If it isn't a slot either then it is unknown. This is almost always a
      * STALE BINARY: a C++-registered widget (lv_xml_register_widget) exists in
      * the XML but not in the running binary, so the XML was updated without a
-     * rebuild. Beyond the missing element, the unknown tag corrupts the parent
-     * stack — its closing tag still pops a real parent below (see
-     * view_end_element_handler), so every following sibling mis-parents (often
-     * onto the screen root at 0,0, bleeding across panels). Log loudly at ERROR
-     * so it is not lost in the noise. */
+     * rebuild. Log loudly at ERROR so it is not lost in the noise.
+     *
+     * The unknown element creates no object, but its closing tag is still
+     * delivered and view_end_element_handler pops unconditionally — so it must
+     * push a frame anyway or the stack loses one level per unknown tag and
+     * every following sibling mis-parents one level too high (the sibling after
+     * the tag escapes the component's view root entirely and lands on the
+     * screen at 0,0, bleeding across panels). The frame repeats the CURRENT
+     * parent, which both balances the pop and keeps the unknown tag's children
+     * attached to the nearest real ancestor rather than dropping them: the
+     * missing widget is a wrapper, and its contents are still valid widgets the
+     * layout expects to see. */
     if(state->item == NULL) {
         LV_LOG_ERROR("XML tag '%s' is not a known widget/element/component/slot — "
                      "likely an unregistered widget in a STALE BINARY (rebuild required). "
-                     "This corrupts the parent stack and mis-parents following elements.",
+                     "Its children are attached to the enclosing parent instead.",
                      name);
+
+        lv_obj_t ** unknown_parent = lv_ll_ins_tail(&state->parent_ll);
+        if(unknown_parent == NULL) {
+            LV_LOG_ERROR("OOM: failed to allocate parent node for unknown tag '%s'; "
+                         "the parent stack is now unbalanced", name);
+            return;
+        }
+        *unknown_parent = state->parent;
         return;
     }
 

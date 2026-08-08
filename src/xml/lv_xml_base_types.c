@@ -599,6 +599,26 @@ lv_part_t lv_xml_style_part_to_enum(const char * txt)
     return 0; /*Return 0 in lack of a better option. */
 }
 
+bool lv_xml_style_selector_token_to_enum(const char * txt, lv_style_selector_t * out)
+{
+    if(txt == NULL || out == NULL) return false;
+
+    lv_state_t state;
+    lv_part_t part;
+    bool known = false;
+
+    if(style_state_lookup(txt, &state)) {
+        *out |= state;
+        known = true;
+    }
+    if(style_part_lookup(txt, &part)) {
+        *out |= part;
+        known = true;
+    }
+
+    return known;
+}
+
 lv_style_selector_t lv_xml_style_selector_text_to_enum(const char * str)
 {
     if(str == NULL) return 0;
@@ -621,18 +641,7 @@ lv_style_selector_t lv_xml_style_selector_text_to_enum(const char * str)
 
     while(next) {
         /* Handle different states and parts */
-        lv_state_t state;
-        lv_part_t part;
-        bool known = false;
-
-        if(style_state_lookup(next, &state)) {
-            selector |= state;
-            known = true;
-        }
-        if(style_part_lookup(next, &part)) {
-            selector |= part;
-            known = true;
-        }
+        bool known = lv_xml_style_selector_token_to_enum(next, &selector);
 
         /* Warn only - the return semantics stay lenient on purpose. Consuming
          * XML may already carry tokens this parser drops, and turning that into

@@ -84,6 +84,19 @@ lv_result_t lv_xml_load_all_from_path(const char * path)
 {
     char path_buf[LV_FS_MAX_PATH_LENGTH];
 
+    /* Probe the directory BEFORE touching the global asset-path prefix.
+     * Setting it first meant a scan of a directory that does not exist still
+     * repointed the prefix at that directory, so an app probing a list of
+     * candidate pack locations silently ended up resolving every later image
+     * against the last candidate it tried. There is no getter for the current
+     * prefix, so the only way to leave it untouched is to not write it. */
+    lv_fs_dir_t probe_dir;
+    if(lv_fs_dir_open(&probe_dir, path) != LV_FS_RES_OK) {
+        LV_LOG_WARN("Couldn't open directory %s", path);
+        return LV_RESULT_INVALID;
+    }
+    lv_fs_dir_close(&probe_dir);
+
     /* set the default asset path to the pack path so XML asset paths are relative to it */
     const char * asset_path = path;
     /* end the asset path with a '/' */

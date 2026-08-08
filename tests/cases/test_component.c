@@ -20,9 +20,9 @@
  *    lv_xml_register_component_from_data(NULL, ...) is not: it lv_streq()s the
  *    name immediately.
  *  - `<subject type="pointer">`: process_subject_element() has int/float/color/
- *    string branches only, so a pointer subject is left at
- *    LV_SUBJECT_TYPE_INVALID with no warning. Registry-level pointer subjects
- *    are covered in test_registries.c.
+ *    string branches only, so a pointer subject warns and is not registered at
+ *    all (see test_subject_decl.c). Registry-level pointer subjects are covered
+ *    in test_registries.c.
  * ---------------------------------------------------------------------------
  *
  * SPDX-License-Identifier: MIT
@@ -839,6 +839,143 @@ static void test_unregistering_with_a_live_instance_leaves_it_safe_to_delete(voi
     ASSERT_CHILD_COUNT(helix_test_env_screen(), 0);
 }
 
+/*===========================================================================
+ * Naming the instance root
+ *
+ * Three names compete for the root object of a component instance, and the
+ * order between them is a contract: lv_obj_find_by_name() is how every panel
+ * reaches into a component it placed.
+ *
+ *   1. the instance site      <my_comp name="header"/>
+ *   2. the component's view   <view name="chrome">
+ *   3. the "<component>_#" indexed default
+ *
+ * Both creation paths have to agree - lv_xml_create() for a top-level instance,
+ * lv_xml_component_process() for one nested inside another component's view -
+ * so every case below is asserted through both.
+ *==========================================================================*/
+
+/** Register `inner`, plus a `wrapper` that instantiates it with `inner_attrs`. */
+static void register_naming_pair(const char * inner_view_attrs, const char * inner_attrs)
+{
+    char inner_xml[256];
+    char wrapper_xml[256];
+
+    lv_snprintf(inner_xml, sizeof(inner_xml),
+                "<component><view extends=\"lv_obj\"%s>"
+                "<lv_label name=\"leaf\" text=\"L\"/>"
+                "</view></component>", inner_view_attrs);
+    lv_snprintf(wrapper_xml, sizeof(wrapper_xml),
+                "<component><view extends=\"lv_obj\" name=\"wrap_root\">"
+                "<inner%s/>"
+                "</view></component>", inner_attrs);
+
+    ASSERT_XML_REGISTERS("inner", inner_xml);
+    ASSERT_XML_REGISTERS("wrapper", wrapper_xml);
+}
+
+/** The nested `inner` instance inside a created `wrapper` root. */
+static lv_obj_t * nested_inner(lv_obj_t * wrapper_root)
+{
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(1u, lv_obj_get_child_count(wrapper_root),
+                                     "the wrapper must hold exactly the nested instance");
+    return lv_obj_get_child(wrapper_root, 0);
+}
+
+/**
+ * With no name anywhere, the root falls back to the indexed default. Named as a
+ * test because the default used to be written twice - once into a buffer that
+ * was then thrown away in lv_xml_create_in_scope(), once for real in each
+ * caller - and deleting the dead half must not take the live one with it.
+ */
+static void test_an_unnamed_root_gets_the_indexed_component_name(void)
+{
+    register_naming_pair("", "");
+
+    lv_obj_t * screen = helix_test_env_screen();
+
+    lv_obj_t * top = XML_CREATE(screen, "inner", NULL);
+    TEST_ASSERT_EQUAL_STRING_MESSAGE("inner_#", lv_obj_get_name(top),
+                                     "a top-level instance lost its default indexed name");
+
+    lv_obj_t * wrap = XML_CREATE(screen, "wrapper", NULL);
+    TEST_ASSERT_EQUAL_STRING_MESSAGE("inner_#", lv_obj_get_name(nested_inner(wrap)),
+                                     "a nested instance lost its default indexed name");
+
+    /* The indexed form is what makes the instances findable. */
+    TEST_ASSERT_EQUAL_PTR(top, lv_obj_find_by_name(screen, "inner_0"));
+}
+
+/**
+ * `<view name="...">` on the component's own root used to be overwritten by the
+ * indexed default, silently: setting a name on your own view did nothing at all
+ * and nothing said so. It is now kept when the instance site does not name the
+ * object.
+ */
+static void test_a_view_name_survives_when_the_instance_site_does_not_name_it(void)
+{
+    register_naming_pair(" name=\"chrome\"", "");
+
+    lv_obj_t * screen = helix_test_env_screen();
+
+    lv_obj_t * top = XML_CREATE(screen, "inner", NULL);
+    TEST_ASSERT_EQUAL_STRING_MESSAGE("chrome", lv_obj_get_name(top),
+                                     "<view name=\"chrome\"> was discarded on a top-level instance");
+    TEST_ASSERT_EQUAL_PTR(top, lv_obj_find_by_name(screen, "chrome"));
+
+    lv_obj_t * wrap = XML_CREATE(screen, "wrapper", NULL);
+    TEST_ASSERT_EQUAL_STRING_MESSAGE("chrome", lv_obj_get_name(nested_inner(wrap)),
+                                     "<view name=\"chrome\"> was discarded on a nested instance");
+}
+
+/**
+ * The instance site is the more specific statement and still wins - callers rely
+ * on being able to name the thing they placed - but the attribute it displaces
+ * was written on purpose, so losing it is reported rather than silent.
+ */
+static void test_the_instance_site_name_beats_the_view_name_and_reports_it(void)
+{
+    register_naming_pair(" name=\"chrome\"", " name=\"header\"");
+
+    lv_obj_t * screen = helix_test_env_screen();
+    static const char * site_attrs[] = {"name", "header", NULL};
+
+    log_capture_start();
+    lv_obj_t * top = XML_CREATE(screen, "inner", site_attrs);
+    log_capture_stop();
+
+    TEST_ASSERT_EQUAL_STRING_MESSAGE("header", lv_obj_get_name(top),
+                                     "the instance-site name did not win on a top-level instance");
+    TEST_ASSERT_TRUE_MESSAGE(log_contains("chrome"),
+                             "the displaced <view name> was dropped silently");
+    TEST_ASSERT_TRUE_MESSAGE(log_contains("takes precedence"),
+                             "the override was not explained in the log");
+
+    log_capture_start();
+    lv_obj_t * wrap = XML_CREATE(screen, "wrapper", NULL);
+    log_capture_stop();
+
+    TEST_ASSERT_EQUAL_STRING_MESSAGE("header", lv_obj_get_name(nested_inner(wrap)),
+                                     "the instance-site name did not win on a nested instance");
+    TEST_ASSERT_TRUE_MESSAGE(log_contains("chrome"),
+                             "the displaced <view name> was dropped silently when nested");
+}
+
+/** Agreeing names are not a conflict and must not be reported as one. */
+static void test_matching_view_and_instance_names_are_not_reported(void)
+{
+    register_naming_pair(" name=\"chrome\"", " name=\"chrome\"");
+
+    log_capture_start();
+    lv_obj_t * wrap = XML_CREATE(helix_test_env_screen(), "wrapper", NULL);
+    log_capture_stop();
+
+    TEST_ASSERT_EQUAL_STRING("chrome", lv_obj_get_name(nested_inner(wrap)));
+    TEST_ASSERT_FALSE_MESSAGE(log_contains("takes precedence"),
+                              "an instance-site name identical to the view name was reported "
+                              "as an override");
+}
+
 /*---------------------------------------------------------------------------
  * main
  *--------------------------------------------------------------------------*/
@@ -862,6 +999,11 @@ int main(void)
 
     RUN_TEST(test_a_nested_component_falls_back_to_its_own_default);
     RUN_TEST(test_a_prop_value_passes_through_a_nesting_level);
+
+    RUN_TEST(test_an_unnamed_root_gets_the_indexed_component_name);
+    RUN_TEST(test_a_view_name_survives_when_the_instance_site_does_not_name_it);
+    RUN_TEST(test_the_instance_site_name_beats_the_view_name_and_reports_it);
+    RUN_TEST(test_matching_view_and_instance_names_are_not_reported);
 
     RUN_TEST(test_get_scope_resolves_only_registered_names);
     RUN_TEST(test_component_foreach_visits_globals_and_every_registered_component);

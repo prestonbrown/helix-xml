@@ -139,6 +139,37 @@ static void test_get_value_of_key_with_null_value_is_indistinguishable_from_abse
     TEST_ASSERT_NULL(lv_xml_get_value_of(attrs, "height"));
 }
 
+/**
+ * An ODD terminator ends the scan instead of being stepped over.
+ *
+ * The scan was `for(int i = 0; attrs[i]; i += 2)`, which assumes the NULL sits
+ * at an EVEN index. Expat always hands over even-terminated arrays, but the
+ * engine has no way to enforce that contract, and the test above builds
+ * {"width", NULL} - terminator at index 1 - so a lookup for a missing key
+ * walked straight past it to attrs[2] and read off the end of the array. ASAN
+ * on the test above is what found it.
+ *
+ * The sentinel here makes the over-read fatal rather than merely undefined: the
+ * word after the terminator is a pointer that cannot be dereferenced, so the
+ * old scan segfaults in lv_streq instead of quietly reading whatever followed.
+ */
+static void test_get_value_of_stops_at_an_odd_terminator(void)
+{
+    const char * attrs[] = {
+        "width", NULL,               /* terminator at index 1 */
+        (const char *)(uintptr_t)0x1, /* never legal to dereference */
+        "trap",
+        NULL
+    };
+
+    TEST_ASSERT_NULL_MESSAGE(lv_xml_get_value_of(attrs, "height"),
+                             "a missing key was resolved past the terminator");
+    TEST_ASSERT_NULL_MESSAGE(lv_xml_get_value_of(attrs, "width"),
+                             "a key with a NULL value did not answer NULL");
+    TEST_ASSERT_NULL_MESSAGE(lv_xml_get_value_of(attrs, "trap"),
+                             "a key beyond the terminator was reachable");
+}
+
 static void test_get_value_of_matches_empty_string_key_literally(void)
 {
     const char * attrs[] = {"", "blank", "width", "100", NULL};
@@ -782,6 +813,7 @@ int main(void)
     RUN_TEST(test_get_value_of_guards_null_arguments);
     RUN_TEST(test_get_value_of_returns_the_first_duplicate);
     RUN_TEST(test_get_value_of_key_with_null_value_is_indistinguishable_from_absent);
+    RUN_TEST(test_get_value_of_stops_at_an_odd_terminator);
     RUN_TEST(test_get_value_of_matches_empty_string_key_literally);
 
     /* lv_xml_atoi / lv_xml_atoi_split */

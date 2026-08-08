@@ -185,6 +185,20 @@ lv_state_t lv_xml_style_state_to_enum(const char * txt);
  */
 lv_part_t lv_xml_style_part_to_enum(const char * txt);
 
+/**
+ * Resolve ONE selector token - a state name or a part name - reporting whether
+ * it was recognised at all.
+ *
+ * lv_xml_style_state_to_enum() and lv_xml_style_part_to_enum() both return 0
+ * for an unknown token, and 0 is also the legitimate value of `default` and
+ * `main`, so their callers cannot tell a typo from a valid token. Use this when
+ * a typo has to be reported.
+ *
+ * @param txt       e.g. "pressed" or "knob"
+ * @param out       ORed with the token's value; untouched if the token is unknown
+ * @return          true if @p txt is a known state or part name
+ */
+bool lv_xml_style_selector_token_to_enum(const char * txt, lv_style_selector_t * out);
 
 /**
  * Convert ORed style parts and states to an ORed selector

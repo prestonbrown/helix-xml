@@ -350,9 +350,17 @@ const char * lv_xml_style_string_process(char * txt, lv_style_selector_t * selec
     char * style_name = lv_xml_split_str(&txt, '-');
     char * selector_str = lv_xml_split_str(&txt, '-');
     while(selector_str != NULL) {
-        /* Handle different states and parts */
-        *selector |= lv_xml_style_state_to_enum(selector_str);
-        *selector |= lv_xml_style_part_to_enum(selector_str);
+        /* Handle different states and parts.
+         *
+         * The two _to_enum() helpers both answer 0 for an unknown token, and 0
+         * is also `default` and `main`, so ORing them meant a typo
+         * (`style_radius-presed`) collapsed to LV_STATE_DEFAULT|LV_PART_MAIN
+         * and the property was applied unconditionally, with nothing logged.
+         * The `selector="..."` attribute path already warns on the same string;
+         * both now go through the one resolver that reports unknown tokens. */
+        if(!lv_xml_style_selector_token_to_enum(selector_str, selector)) {
+            LV_LOG_WARN("%s is an unknown token in style selector for `%s`", selector_str, style_name);
+        }
 
         /* Move to the next token */
         selector_str = lv_xml_split_str(&txt, '-');

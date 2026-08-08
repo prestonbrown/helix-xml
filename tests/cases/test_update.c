@@ -24,7 +24,9 @@
  * Every assertion below reads the live object back after the call. A test that
  * only checked the return value would pass against a function that parsed the
  * XML and then did nothing - which is very nearly what happens on the failure
- * paths, since all of them warn and still return LV_RESULT_OK.
+ * paths. The return value is checked too: a dispatch failure (unknown widget
+ * type, no `name`, no such widget on the active screen, wrong tag prefix) is
+ * reported as LV_RESULT_INVALID rather than swallowed into the log.
  *
  * NOT TESTED, DELIBERATELY
  *  - NULL into lv_xml_update_from_data(): it goes straight to lv_strlen with no
@@ -37,9 +39,9 @@
 
 #include <lvgl.h>
 
-/* Log capture: every rejection path in lv_xml_update.c is a LV_LOG_WARN followed
- * by LV_RESULT_OK, so the log is what tells "declined for reason X" apart from
- * "declined for reason Y". */
+/* Log capture: every rejection path in lv_xml_update.c fails the call the same
+ * way, so the log is what tells "declined for reason X" apart from "declined for
+ * reason Y". */
 #include "helpers/helix_log_capture.h"
 #include "helpers/helix_test_env.h"
 #include "helpers/helix_test_pump.h"
@@ -197,7 +199,7 @@ static void test_a_nested_widget_is_reachable_only_through_its_path(void)
 
     /* Bare name: not a direct child of the screen, so not found. */
     log_capture_start();
-    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK,
+    TEST_ASSERT_EQUAL_INT(LV_RESULT_INVALID,
                           (int)lv_xml_update_from_data(
                               "<update-lv_label name=\"upd_nested\" text=\"by_bare_name\"/>"));
     log_capture_stop();
@@ -217,13 +219,16 @@ static void test_a_nested_widget_is_reachable_only_through_its_path(void)
 }
 
 /**
- * PINS CURRENT BEHAVIOUR - suspected bug: every targeting failure in
- * lv_xml_update_from_data() is a LV_LOG_WARN inside the expat start handler,
- * and the handler cannot influence the return value. So a snippet that updated
- * nothing at all is indistinguishable, to the caller, from one that worked. The
- * only way an app can detect a typo'd widget name is by scraping the log.
+ * A dispatch failure reaches the caller.
+ *
+ * Every targeting failure used to be a LV_LOG_WARN inside the expat start
+ * handler, and the handler cannot influence XML_Parse()'s return value, so a
+ * snippet that updated nothing at all was indistinguishable from one that
+ * worked and the only way to detect a typo'd widget name was to scrape the log.
+ * The handler now records the failure in its own context and the function
+ * reports it.
  */
-static void test_updating_a_name_that_does_not_exist_changes_nothing_but_reports_ok(void)
+static void test_updating_a_name_that_does_not_exist_is_reported_to_the_caller(void)
 {
     lv_obj_t * label = make_target_label("upd_label", "before");
 
@@ -233,13 +238,59 @@ static void test_updating_a_name_that_does_not_exist_changes_nothing_but_reports
     log_capture_stop();
     helix_test_pump(30);
 
-    TEST_ASSERT_EQUAL_INT_MESSAGE(LV_RESULT_OK, (int)res,
-                                  "the OK-on-miss behaviour has changed - see the note above");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(LV_RESULT_INVALID, (int)res,
+                                  "an update that hit no widget still reported success");
     TEST_ASSERT_TRUE_MESSAGE(log_contains("No widget is found with the name of `no_such_widget`"),
                              "a missing target was not reported at all");
 
     /* And nothing was touched. */
     ASSERT_LABEL_TEXT(label, "before");
+}
+
+/**
+ * One bad element in an otherwise good batch is enough to fail the call. The
+ * good element still applies (see the non-atomicity note further down), so the
+ * return value is the only signal that part of the batch missed.
+ */
+static void test_one_failed_element_fails_the_whole_batch(void)
+{
+    lv_obj_t * label = make_target_label("upd_label", "before");
+
+    log_capture_start();
+    lv_result_t res = lv_xml_update_from_data(
+                          "<updates>"
+                          "  <update-lv_label name=\"upd_label\" text=\"after\"/>"
+                          "  <update-lv_label name=\"no_such_widget\" text=\"after\"/>"
+                          "</updates>");
+    log_capture_stop();
+    helix_test_pump(30);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(LV_RESULT_INVALID, (int)res,
+                                  "a batch with one unresolvable element reported success");
+    ASSERT_LABEL_TEXT(label, "after");
+}
+
+/**
+ * The `<updates>` container is not itself an update and must not be counted as
+ * a failed one - otherwise every multi-element batch would report INVALID.
+ */
+static void test_the_updates_container_is_not_treated_as_a_failed_element(void)
+{
+    lv_obj_t * label = make_target_label("upd_label", "before");
+
+    log_capture_start();
+    lv_result_t res = lv_xml_update_from_data(
+                          "<updates>"
+                          "  <update-lv_label name=\"upd_label\" text=\"after\"/>"
+                          "</updates>");
+    log_capture_stop();
+    helix_test_pump(30);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(LV_RESULT_OK, (int)res,
+                                  "the container element was counted as a dispatch failure");
+    TEST_ASSERT_FALSE_MESSAGE(log_contains("updates doesn't start with"),
+                              "the container element was warned about");
+    ASSERT_LABEL_TEXT(label, "after");
 }
 
 /** A widget that is not on the ACTIVE screen is out of reach. */
@@ -253,7 +304,7 @@ static void test_a_widget_on_an_inactive_screen_is_not_reachable(void)
     helix_test_pump(30);
 
     log_capture_start();
-    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK,
+    TEST_ASSERT_EQUAL_INT(LV_RESULT_INVALID,
                           (int)lv_xml_update_from_data(
                               "<update-lv_label name=\"upd_offscreen\" text=\"after\"/>"));
     log_capture_stop();
@@ -272,7 +323,7 @@ static void test_an_update_without_a_name_attribute_does_nothing(void)
     lv_obj_t * label = make_target_label("upd_label", "before");
 
     log_capture_start();
-    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK,
+    TEST_ASSERT_EQUAL_INT(LV_RESULT_INVALID,
                           (int)lv_xml_update_from_data("<update-lv_label text=\"after\"/>"));
     log_capture_stop();
     helix_test_pump(30);
@@ -292,7 +343,7 @@ static void test_a_tag_without_the_update_prefix_is_refused(void)
     lv_obj_t * label = make_target_label("upd_label", "before");
 
     log_capture_start();
-    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK,
+    TEST_ASSERT_EQUAL_INT(LV_RESULT_INVALID,
                           (int)lv_xml_update_from_data(
                               "<lv_label name=\"upd_label\" text=\"after\"/>"));
     log_capture_stop();
@@ -309,7 +360,7 @@ static void test_a_tag_shorter_than_the_prefix_is_refused(void)
     lv_obj_t * label = make_target_label("upd_label", "before");
 
     log_capture_start();
-    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK,
+    TEST_ASSERT_EQUAL_INT(LV_RESULT_INVALID,
                           (int)lv_xml_update_from_data("<up name=\"upd_label\" text=\"after\"/>"));
     log_capture_stop();
     helix_test_pump(30);
@@ -324,7 +375,7 @@ static void test_an_update_naming_an_unknown_widget_is_refused(void)
     lv_obj_t * label = make_target_label("upd_label", "before");
 
     log_capture_start();
-    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK,
+    TEST_ASSERT_EQUAL_INT(LV_RESULT_INVALID,
                           (int)lv_xml_update_from_data(
                               "<update-not_a_widget name=\"upd_label\" text=\"after\"/>"));
     log_capture_stop();
@@ -371,10 +422,11 @@ static void test_a_payload_that_is_not_xml_is_rejected(void)
 }
 
 /**
- * A snippet that breaks AFTER a valid update element: expat reports the error,
- * but the elements it already dispatched have taken effect. Pinned because it
- * means an update batch is not atomic - a caller cannot treat LV_RESULT_INVALID
- * as "nothing happened".
+ * PINS INTENTIONAL BEHAVIOUR: an update batch is NOT atomic. LV_RESULT_INVALID
+ * means "something in this batch failed", never "nothing happened" - the
+ * elements expat completed before the syntax error have already been applied,
+ * and rolling them back would need a per-attribute undo the engine has no basis
+ * for (a widget's prior state is not recorded anywhere).
  */
 static void test_a_partially_valid_snippet_applies_what_it_parsed_before_failing(void)
 {
@@ -405,7 +457,9 @@ int main(void)
     RUN_TEST(test_the_name_attribute_is_consumed_and_not_reapplied);
 
     RUN_TEST(test_a_nested_widget_is_reachable_only_through_its_path);
-    RUN_TEST(test_updating_a_name_that_does_not_exist_changes_nothing_but_reports_ok);
+    RUN_TEST(test_updating_a_name_that_does_not_exist_is_reported_to_the_caller);
+    RUN_TEST(test_one_failed_element_fails_the_whole_batch);
+    RUN_TEST(test_the_updates_container_is_not_treated_as_a_failed_element);
     RUN_TEST(test_a_widget_on_an_inactive_screen_is_not_reachable);
     RUN_TEST(test_an_update_without_a_name_attribute_does_nothing);
 

@@ -49,7 +49,12 @@ const char * lv_xml_get_value_of(const char ** attrs, const char * name)
     if(attrs == NULL) return NULL;
     if(name == NULL) return NULL;
 
-    for(int i = 0; attrs[i]; i += 2) {
+    /* Both halves of the pair are bound-checked. expat always hands over an
+     * even-terminated array, but the engine has no way to enforce that contract
+     * and a hand-built list such as {"width", NULL} puts the terminator at an
+     * ODD index - the key-only test then stepped to attrs[2] and read off the
+     * end of the array. An odd terminator ends the scan instead. */
+    for(int i = 0; attrs[i] != NULL && attrs[i + 1] != NULL; i += 2) {
         if(lv_streq(attrs[i], name)) return attrs[i + 1];
     }
 

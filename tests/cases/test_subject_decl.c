@@ -207,30 +207,35 @@ static void test_the_type_attribute_overrides_the_tag_name(void)
  *==========================================================================*/
 
 /**
- * PINS CURRENT BEHAVIOUR - suspected bug: a type nobody implements matches no
- * branch, so the lv_zalloc'd subject is registered UNINITIALISED
- * (LV_SUBJECT_TYPE_INVALID == 0) and nothing is logged. That is the exact
- * failure mode the type= fix was written to remove, still reachable through a
- * typo: `type="integer"` registers a subject that binds to nothing and swallows
- * every write.
+ * A type nobody implements matches no branch, so the lv_zalloc'd subject would
+ * be registered UNINITIALISED (LV_SUBJECT_TYPE_INVALID == 0): every bind against
+ * it sticks at its default and every lv_subject_set_* is a silent no-op - the
+ * exact failure mode `type=` exists to prevent, reachable through a plain typo
+ * (`type="integer"`).
  *
- * Registering nothing, or warning, would both be better. Pinned, not fixed.
+ * So: warn, and register nothing. A missing subject is diagnosable at the
+ * binding site; an invalid one looks registered and quietly does nothing. One
+ * bad row must not take the rest of the block with it.
  */
-static void test_a_subject_with_an_unknown_type_is_registered_but_left_invalid(void)
+static void test_a_subject_with_an_unknown_type_warns_and_is_not_registered(void)
 {
     log_capture_start();
     lv_xml_component_scope_t * scope =
         REGISTER_SCOPE("subj_badtype",
-                       SUBJECT_COMPONENT("<subject name=\"s_bad\" type=\"integer\" value=\"7\"/>"));
+                       SUBJECT_COMPONENT("<subject name=\"s_bad\" type=\"integer\" value=\"7\"/>"
+                                         "<subject name=\"s_ok\" type=\"int\" value=\"1\"/>"));
     log_capture_stop();
 
-    lv_subject_t * s = ASSERT_SUBJECT(scope, "s_bad");
+    TEST_ASSERT_NULL_MESSAGE(lv_xml_get_subject(scope, "s_bad"),
+                             "a subject with an unimplemented type= was registered anyway, so "
+                             "every bind against it silently does nothing");
+    TEST_ASSERT_TRUE_MESSAGE(log_contains("s_bad"),
+                             "an unknown subject type was not reported by name");
+    TEST_ASSERT_TRUE_MESSAGE(log_contains("integer"),
+                             "the offending type was not named in the diagnostic");
 
-    TEST_ASSERT_EQUAL_INT_MESSAGE(LV_SUBJECT_TYPE_INVALID, (int)s->type,
-                                  "an unknown subject type is no longer left invalid - "
-                                  "see the note above this test");
-    TEST_ASSERT_FALSE_MESSAGE(log_contains("s_bad"),
-                              "an unknown subject type is now reported - update this pin");
+    /* One bad row is not fatal - the following declaration still registered. */
+    TEST_ASSERT_EQUAL_INT(1, lv_subject_get_int(ASSERT_SUBJECT(scope, "s_ok")));
 }
 
 /** No name= to register it under: skipped, with a warning. */
@@ -321,7 +326,7 @@ int main(void)
     RUN_TEST(test_the_tag_per_type_declaration_form_still_works);
     RUN_TEST(test_the_type_attribute_overrides_the_tag_name);
 
-    RUN_TEST(test_a_subject_with_an_unknown_type_is_registered_but_left_invalid);
+    RUN_TEST(test_a_subject_with_an_unknown_type_warns_and_is_not_registered);
     RUN_TEST(test_a_subject_without_a_name_is_skipped);
     RUN_TEST(test_a_subject_without_a_value_is_skipped);
 

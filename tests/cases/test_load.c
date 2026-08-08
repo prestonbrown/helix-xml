@@ -445,18 +445,16 @@ static void test_a_scanned_path_that_already_ends_in_a_separator_is_not_doubled(
 }
 
 /**
- * PINS CURRENT BEHAVIOUR - suspected bug: lv_xml_load_all_from_path() calls
- * lv_xml_set_default_asset_path() BEFORE it tries to open the directory, so a
- * scan that fails outright still overwrites the prefix a previous successful
- * scan (or an explicit lv_xml_set_default_asset_path() call) had established.
- * An app that probes several candidate pack locations, or that retries after a
- * failure, silently ends up resolving its images against a directory that does
- * not exist.
+ * A scan that fails outright must leave the default asset path alone.
  *
- * If the ordering is ever fixed, this test fails and should be rewritten to
- * assert the prefix survived - do not simply delete it.
+ * lv_xml_load_all_from_path() used to call lv_xml_set_default_asset_path()
+ * BEFORE opening the directory, so a failed scan still repointed the prefix at
+ * a directory that does not exist - an app probing a list of candidate pack
+ * locations silently resolved every later image against the last candidate it
+ * tried. The directory is now probed first and the prefix is written only once
+ * the scan is known to be able to start.
  */
-static void test_a_failed_scan_still_overwrites_the_default_asset_path(void)
+static void test_a_failed_scan_leaves_the_default_asset_path_alone(void)
 {
     lv_xml_set_default_asset_path("A:/known/good/");
 
@@ -465,9 +463,35 @@ static void test_a_failed_scan_still_overwrites_the_default_asset_path(void)
     lv_xml_component_scope_t * scope = make_probe_scope("asset_probe");
     TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_register_image(scope, "logo", "logo.png"));
 
-    TEST_ASSERT_EQUAL_STRING_MESSAGE(PACK_MISSING "/logo.png",
+    TEST_ASSERT_EQUAL_STRING_MESSAGE("A:/known/good/logo.png",
                                      (const char *)lv_xml_get_image(scope, "logo"),
-                                     "asset-path clobbering on a failed scan has changed");
+                                     "a failed scan clobbered the previously established asset path");
+}
+
+/**
+ * The same guarantee for the other two ways a scan can fail to start: a path
+ * that names a plain file, and a path with no driver letter. Neither reaches
+ * the point of loading anything, so neither may move the prefix.
+ */
+static void test_a_scan_of_a_file_or_a_letterless_path_leaves_the_asset_path_alone(void)
+{
+    lv_xml_set_default_asset_path("A:/known/good/");
+
+    TEST_ASSERT_EQUAL_INT(LV_RESULT_INVALID, (int)lv_xml_load_all_from_path(FILE_NOT_DIR));
+
+    lv_xml_component_scope_t * scope = make_probe_scope("asset_probe");
+    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_register_image(scope, "logo", "logo.png"));
+    TEST_ASSERT_EQUAL_STRING_MESSAGE("A:/known/good/logo.png",
+                                     (const char *)lv_xml_get_image(scope, "logo"),
+                                     "scanning a file instead of a directory moved the asset path");
+
+    TEST_ASSERT_EQUAL_INT(LV_RESULT_INVALID, (int)lv_xml_load_all_from_path("/no/driver/letter"));
+
+    lv_xml_component_scope_t * scope2 = make_probe_scope("asset_probe2");
+    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_register_image(scope2, "logo", "logo.png"));
+    TEST_ASSERT_EQUAL_STRING_MESSAGE("A:/known/good/logo.png",
+                                     (const char *)lv_xml_get_image(scope2, "logo"),
+                                     "scanning a letterless path moved the asset path");
 }
 
 /*---------------------------------------------------------------------------
@@ -499,7 +523,8 @@ int main(void)
     RUN_TEST(test_the_default_asset_path_does_not_touch_in_memory_image_sources);
     RUN_TEST(test_a_successful_scan_points_the_asset_path_at_the_scanned_directory);
     RUN_TEST(test_a_scanned_path_that_already_ends_in_a_separator_is_not_doubled);
-    RUN_TEST(test_a_failed_scan_still_overwrites_the_default_asset_path);
+    RUN_TEST(test_a_failed_scan_leaves_the_default_asset_path_alone);
+    RUN_TEST(test_a_scan_of_a_file_or_a_letterless_path_leaves_the_asset_path_alone);
 
     return UNITY_END();
 }

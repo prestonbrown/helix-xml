@@ -116,17 +116,38 @@ lv_obj_t * lv_xml_component_process(lv_xml_parser_state_t * state, const char * 
         return NULL;
     }
 
+#if LV_USE_OBJ_NAME
+    /*Report an instance-site `name` displacing one the component set on its own
+     *<view> root. Checked BEFORE apply_cb: apply_cb applies the instance-site
+     *name itself and frees the string lv_obj_get_name() returns, so afterwards
+     *the two are indistinguishable.*/
+    {
+        const char * site_name = lv_xml_get_value_of(attrs, "name");
+        const char * view_name = lv_obj_get_name(item);
+        if(site_name && view_name && !lv_streq(view_name, site_name)) {
+            LV_LOG_WARN("Component '%s' sets name=\"%s\" on its own <view>; "
+                        "the instance-site name=\"%s\" takes precedence",
+                        scope->name, view_name, site_name);
+        }
+    }
+#endif
+
     /* Apply the properties of the component, e.g. <my_button x="20" width="300"/> */
     state->item = item;
     lv_widget_processor_t * extended_proc = lv_xml_widget_get_extended_widget_processor(scope->extends);
     extended_proc->apply_cb(state, attrs);
 
 #if LV_USE_OBJ_NAME
-    /*Set a default indexed name*/
+    /*Set a default indexed name.
+     *Name precedence (identical in lv_xml_create()): the instance site wins, a
+     *name the component set on its own <view> root comes next, and only an
+     *object with no name at all gets the "<component>_#" default. The default
+     *used to be applied unconditionally, which silently discarded
+     *`<view name="...">`.*/
     if(state->item) {
         const char * value_of_name = lv_xml_get_value_of(attrs, "name");
         if(value_of_name) lv_obj_set_name(item, value_of_name);
-        else {
+        else if(lv_obj_get_name(item) == NULL) {
             char name_buf[128];
             lv_snprintf(name_buf, sizeof(name_buf), "%s_#", scope->name);
             lv_obj_set_name(state->item, name_buf);
@@ -708,6 +729,18 @@ static void process_subject_element(lv_xml_parser_state_t * state, const char * 
         char * buf_prev = lv_malloc(256);
         char * buf_act = lv_malloc(256);
         lv_subject_init_string(subject, buf_act, buf_prev, 256, value);
+    }
+    else {
+        /* No branch matched, so the lv_zalloc'd subject is still
+         * LV_SUBJECT_TYPE_INVALID: every bind against it would stick at its
+         * default and every lv_subject_set_* would be a silent no-op - exactly
+         * the failure `type=` exists to prevent, reachable through a plain typo
+         * (`type="integer"`). Registering it would hide the mistake for the
+         * lifetime of the app, so warn and register nothing: a missing subject
+         * is diagnosable at the binding site, an invalid one is not. */
+        LV_LOG_WARN("Unknown subject type '%s' for subject '%s'; the subject is NOT registered", type, name);
+        lv_free(subject);
+        return;
     }
 
     /* Parser-allocated: subjects_ll owns `subject` and frees it on scope teardown. */
@@ -1291,24 +1324,121 @@ static void end_metadata_handler(void * user_data, const char * name)
     lv_xml_parser_end_section(state, name);
 }
 
+/**
+ * Scan forward from `p` for `needle`, skipping anything inside an XML comment
+ * (`<!-- ... -->`), a CDATA section (`<![CDATA[ ... ]]>`) or a processing
+ * instruction (`<? ... ?>`). Returns NULL if the needle does not occur outside
+ * such a region, or if one of them is left unterminated (nothing after it can
+ * be trusted either).
+ */
+static const char * xml_find_outside_markup(const char * p, const char * needle)
+{
+    size_t needle_len = lv_strlen(needle);
+
+    while(*p) {
+        if(p[0] == '<' && p[1] == '!') {
+            if(lv_strncmp(p, "<!--", 4) == 0) {
+                const char * close = strstr(p + 4, "-->");
+                if(close == NULL) return NULL;
+                p = close + 3;
+                continue;
+            }
+            if(lv_strncmp(p, "<![CDATA[", 9) == 0) {
+                const char * close = strstr(p + 9, "]]>");
+                if(close == NULL) return NULL;
+                p = close + 3;
+                continue;
+            }
+        }
+        if(p[0] == '<' && p[1] == '?') {
+            const char * close = strstr(p + 2, "?>");
+            if(close == NULL) return NULL;
+            p = close + 2;
+            continue;
+        }
+        if(lv_strncmp(p, needle, needle_len) == 0) return p;
+        p++;
+    }
+
+    return NULL;
+}
+
+/**
+ * Advance past the start tag beginning at `tag` (which must point at its '<'),
+ * returning a pointer just past the closing '>' and reporting through
+ * `self_closing` whether the tag ended with "/>". Quoted attribute values are
+ * honoured, so a '>' or a '/' inside a value does not terminate the tag.
+ * Returns NULL for an unterminated tag.
+ */
+static const char * xml_skip_start_tag(const char * tag, bool * self_closing)
+{
+    char quote = '\0';
+    bool slash = false;
+    const char * p;
+
+    for(p = tag; *p; p++) {
+        if(quote != '\0') {
+            if(*p == quote) quote = '\0';
+            continue;
+        }
+        if(*p == '"' || *p == '\'') {
+            quote = *p;
+            slash = false;
+            continue;
+        }
+        if(*p == '>') {
+            *self_closing = slash;
+            return p + 1;
+        }
+        if(*p == '/') slash = true;
+        else if(*p != ' ' && *p != '\t' && *p != '\n' && *p != '\r') slash = false;
+    }
+
+    return NULL;
+}
+
+/**
+ * The opening `<view` of the document: the first one that is neither inside a
+ * comment/CDATA nor merely a prefix of a longer name (`<viewport ...>`).
+ */
+static const char * xml_find_view_start(const char * doc)
+{
+    const char * p = doc;
+
+    while((p = xml_find_outside_markup(p, "<view")) != NULL) {
+        char c = p[5];
+        if(c == '\0' || c == '>' || c == '/' || c == ' ' || c == '\t' || c == '\n' || c == '\r') return p;
+        p++;
+    }
+
+    return NULL;
+}
+
 static char * extract_view_content(const char * xml_definition)
 {
     if(!xml_definition) return NULL;
 
-    /* Find start of view tag */
-    const char * start = strstr(xml_definition, "<view");
+    /* The view body is located by scanning rather than by a bare strstr for
+     * "</view>": a literal `</view>` inside a comment or a CDATA section is not
+     * the closing tag, and cutting the body there stores a truncated `view_def`
+     * that is still well-formed enough for registration to report success - and
+     * then fails on EVERY create, forever. Commenting out a block of a layout
+     * file is an ordinary thing to do and must not silently break a component. */
+    const char * start = xml_find_view_start(xml_definition);
     if(!start) return NULL;
 
-    /* Find end of view tag */
-    const char * end = strstr(xml_definition, "</view>");
-    if(end) {
-        end += 7; /* Include "</view>" in result */
-    }
-    else {
-        /*If there is no "</view> maybe it's like <view ... />"*/
-        end = strstr(start, "/>");
+    bool self_closing = false;
+    const char * end = xml_skip_start_tag(start, &self_closing);
+    if(!end) return NULL;   /*Unterminated `<view ...` - nothing usable to store*/
+
+    /*A `<view ... />` is the whole view; otherwise the body runs to the real
+     *closing tag. Note the expat metadata pass already ran and succeeded, so a
+     *document reaching here is well-formed: a missing `</view>` means the tag
+     *belongs to something else, not that the file was truncated.*/
+    if(!self_closing) {
+        end = xml_find_outside_markup(end, "</view>");
         if(!end) return NULL;
-        end += 2; /* Include "/>" in result */
+        end += 7; /* Include "</view>" in result */
     }
 
     /* Calculate and allocate length */

@@ -211,86 +211,125 @@ static void test_stop_opens_a_gradient_stop_only_inside_a_gradients_block(void)
     TEST_ASSERT_EQUAL_INT(LV_XML_PARSER_SECTION_GRAD_STOP, (int)st.section);
 }
 
-/** The five closers that really do pop back to "no section". */
-static void test_end_section_pops_the_blocks_that_declare_a_closer(void)
+/**
+ * Open and close must be symmetric: EVERY block name start_section() can open
+ * has to be closed by its own close tag. A missing closer leaves the section
+ * latched, and everything between that close tag and the next block opener is
+ * then handed to the wrong element processor - see the `</api>` document below
+ * for what that actually costs.
+ */
+static void test_every_block_opener_is_popped_by_its_own_close_tag(void)
 {
-    static const char * CLOSERS[] = {"params", "consts", "gradients", "styles", "view"};
-
-    for(size_t i = 0; i < sizeof(CLOSERS) / sizeof(CLOSERS[0]); i++) {
+    for(size_t i = 0; i < sizeof(SECTION_OPENERS) / sizeof(SECTION_OPENERS[0]); i++) {
         lv_xml_parser_state_t st;
         lv_xml_parser_state_init(&st);
-        /* Put the state somewhere non-NONE first so the pop is observable. */
-        lv_xml_parser_start_section(&st, "styles");
-        TEST_ASSERT_EQUAL_INT(LV_XML_PARSER_SECTION_STYLES, (int)st.section);
 
-        lv_xml_parser_end_section(&st, CLOSERS[i]);
+        lv_xml_parser_start_section(&st, SECTION_OPENERS[i].tag);
+        TEST_ASSERT_EQUAL_INT((int)SECTION_OPENERS[i].expect, (int)st.section);
+
+        lv_xml_parser_end_section(&st, SECTION_OPENERS[i].tag);
         TEST_ASSERT_EQUAL_INT_MESSAGE(
             LV_XML_PARSER_SECTION_NONE, (int)st.section,
-            helix_xml_assert_msgf("</%s> must reset the section", CLOSERS[i]));
+            helix_xml_assert_msgf("</%s> must reset the section - a latched section feeds the "
+                                  "next elements to the wrong processor", SECTION_OPENERS[i].tag));
     }
-}
 
-/**
- * PINS CURRENT BEHAVIOUR - suspected bug: only params/consts/gradients/styles/view
- * are listed in lv_xml_parser_end_section(), so `</api>`, `</fonts>`, `</images>`,
- * `</subjects>`, `</animation>`, `</timeline>` and `</include_timeline>` leave
- * their section LATCHED. Nothing between such a close tag and the next block
- * opener returns to SECTION_NONE, so any stray element there is fed to that
- * section's element processor - e.g. a comment-adjacent tag after `</subjects>`
- * reaches process_subject_element() and is warned about as a malformed subject.
- * In practice it self-corrects because the next tag is almost always another
- * block opener, which is why this has survived.
- */
-static void test_end_section_does_not_pop_api_fonts_images_or_subjects(void)
-{
-    static const section_case_t LATCHED[] = {
-        {"api", LV_XML_PARSER_SECTION_API},
-        {"fonts", LV_XML_PARSER_SECTION_FONTS},
-        {"images", LV_XML_PARSER_SECTION_IMAGES},
-        {"subjects", LV_XML_PARSER_SECTION_SUBJECTS},
-        {"animation", LV_XML_PARSER_SECTION_ANIMATION},
-        {"timeline", LV_XML_PARSER_SECTION_TIMELINE},
-        {"include_timeline", LV_XML_PARSER_SECTION_INCLUDE_TIMELINE},
-    };
-
-    for(size_t i = 0; i < sizeof(LATCHED) / sizeof(LATCHED[0]); i++) {
+    /* And a closer still pops a DIFFERENT open section, which is what keeps a
+     * mis-nested document from latching forever. */
+    for(size_t i = 0; i < sizeof(SECTION_OPENERS) / sizeof(SECTION_OPENERS[0]); i++) {
         lv_xml_parser_state_t st;
         lv_xml_parser_state_init(&st);
-
-        lv_xml_parser_start_section(&st, LATCHED[i].tag);
-        TEST_ASSERT_EQUAL_INT((int)LATCHED[i].expect, (int)st.section);
-
-        lv_xml_parser_end_section(&st, LATCHED[i].tag);
+        lv_xml_parser_start_section(&st, "styles");
+        lv_xml_parser_end_section(&st, SECTION_OPENERS[i].tag);
         TEST_ASSERT_EQUAL_INT_MESSAGE(
-            (int)LATCHED[i].expect, (int)st.section,
-            helix_xml_assert_msgf("</%s> currently leaves the section latched - if this "
-                                  "starts failing the closer list was fixed",
-                                  LATCHED[i].tag));
+            LV_XML_PARSER_SECTION_NONE, (int)st.section,
+            helix_xml_assert_msgf("</%s> left <styles> open", SECTION_OPENERS[i].tag));
     }
 }
 
 /**
- * PINS CURRENT BEHAVIOUR - suspected bug: `params` is in the CLOSER list of
- * lv_xml_parser_end_section() but has no matching opener in
- * lv_xml_parser_start_section(). `<params>` therefore opens nothing, while
- * `</params>` closes whatever happened to be open. In an `<api><params>...`
- * document that is exactly wrong: the close tag drops the state out of
- * SECTION_API while `<api>` is still open.
+ * `params` is not part of the grammar - `<api>` holds `<prop>` elements - and it
+ * used to sit in the CLOSER list with no matching opener. `<params>` therefore
+ * opened nothing while `</params>` closed whatever happened to be open, which in
+ * the one document shape the tag appears in (`<api><params>...`) dropped the
+ * state out of SECTION_API while `<api>` was still open. Both halves must now be
+ * inert.
  */
-static void test_params_closes_a_section_it_can_never_have_opened(void)
+static void test_params_neither_opens_nor_closes_a_section(void)
 {
     lv_xml_parser_state_t st;
     lv_xml_parser_state_init(&st);
 
     lv_xml_parser_start_section(&st, "params");
     TEST_ASSERT_EQUAL_INT_MESSAGE(LV_XML_PARSER_SECTION_NONE, (int)st.section,
-                                  "<params> opens no section today");
+                                  "<params> opens no section");
 
     lv_xml_parser_state_init(&st);
     lv_xml_parser_start_section(&st, "api");
+    lv_xml_parser_start_section(&st, "params");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(LV_XML_PARSER_SECTION_API, (int)st.section,
+                                  "<params> inside <api> must leave <api> open");
     lv_xml_parser_end_section(&st, "params");
-    TEST_ASSERT_EQUAL_INT_MESSAGE(LV_XML_PARSER_SECTION_NONE, (int)st.section,
-                                  "</params> currently pops the still-open <api> section");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(LV_XML_PARSER_SECTION_API, (int)st.section,
+                                  "</params> must not pop the still-open <api> section");
+
+    /* `</api>` is what closes it. */
+    lv_xml_parser_end_section(&st, "api");
+    TEST_ASSERT_EQUAL_INT(LV_XML_PARSER_SECTION_NONE, (int)st.section);
+}
+
+/**
+ * The section machine seen from the document, which is the only place the cost
+ * of a latched section is visible.
+ *
+ * `<prop>` elements are accepted only while SECTION_API is open. When `</api>`
+ * did not close its section, a stray `<prop>` written AFTER `</api>` - outside
+ * the api block entirely - was still fed to process_prop_element() and became a
+ * real component parameter: `$ghost` then resolved to its bogus default. With
+ * open and close symmetric the section is NONE by then, the stray element is
+ * ignored, and `$ghost` resolves to nothing (an undeclared param drops the
+ * attribute, so the label keeps its empty default text).
+ */
+static void test_a_stray_prop_after_the_api_block_is_not_accepted_as_a_param(void)
+{
+    ASSERT_XML_REGISTERS("latched_api",
+                         "<component>"
+                         "  <api>"
+                         "    <prop name=\"real\" type=\"string\" default=\"R\"/>"
+                         "  </api>"
+                         "  <prop name=\"ghost\" type=\"string\" default=\"G\"/>"
+                         "  <view extends=\"lv_obj\">"
+                         "    <lv_label name=\"from_real\" text=\"$real\"/>"
+                         "    <lv_label name=\"from_ghost\" text=\"$ghost\"/>"
+                         "    <lv_label name=\"no_text\"/>"
+                         "  </view>"
+                         "</component>");
+
+    lv_xml_component_scope_t * scope = lv_xml_component_get_scope("latched_api");
+    TEST_ASSERT_NOT_NULL(scope);
+
+    /* The scope holds exactly the one prop that was inside <api>. */
+    uint32_t prop_count = 0;
+    bool saw_ghost = false;
+    lv_xml_param_t * prop;
+    LV_LL_READ(&scope->param_ll, prop) {
+        prop_count++;
+        if(prop->name && lv_streq(prop->name, "ghost")) saw_ghost = true;
+    }
+    TEST_ASSERT_FALSE_MESSAGE(saw_ghost,
+                              "a <prop> written after </api> was registered as a component "
+                              "parameter - </api> did not close its section");
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(1u, prop_count,
+                                     "exactly the props inside <api> may be registered");
+
+    /* Same statement from the rendered tree: the declared param resolves to its
+     * default, the stray one resolves to nothing at all - the attribute is
+     * dropped, so the label is indistinguishable from one that never had a
+     * `text` attribute. */
+    lv_obj_t * root = XML_CREATE(helix_test_env_screen(), "latched_api", NULL);
+    ASSERT_LABEL_TEXT(ASSERT_NAMED(root, "from_real"), "R");
+    ASSERT_LABEL_TEXT(ASSERT_NAMED(root, "from_ghost"),
+                      lv_label_get_text(ASSERT_NAMED(root, "no_text")));
 }
 
 /**
@@ -569,17 +608,18 @@ static void test_parent_tracking_returns_to_the_enclosing_element_for_siblings(v
 }
 
 /**
- * PINS CURRENT BEHAVIOUR - suspected bug (already described in the LV_LOG_ERROR
- * in view_start_element_handler, but never pinned): an unknown tag pushes NO
- * parent frame, while its close tag pops one anyway. The stack therefore loses
- * one level per unknown element, and every following sibling is parented one
- * level too high - here `after` escapes the component entirely and is created
- * directly on the SCREEN, outside the view root it was written inside.
+ * An unknown tag creates no object, but its CLOSE tag is still delivered and the
+ * end handler pops unconditionally - so the start must push a frame anyway or
+ * the stack loses one level per unknown element and every following sibling is
+ * parented one level too high. The sibling after the tag used to escape the
+ * component entirely and land on the SCREEN, outside the view root it was
+ * written inside; a single stale-binary widget name bled the rest of the layout
+ * across panels.
  *
- * The engine logs loudly and keeps going by design, so this test asserts the
- * damage rather than an error return.
+ * The engine logs loudly and keeps going by design, so what is asserted here is
+ * the resulting tree, not an error return.
  */
-static void test_an_unknown_tag_unbalances_the_parent_stack_for_later_siblings(void)
+static void test_an_unknown_tag_keeps_the_parent_stack_balanced(void)
 {
     probe_register();
     ASSERT_XML_REGISTERS("stack_corrupt",
@@ -604,26 +644,33 @@ static void test_an_unknown_tag_unbalances_the_parent_stack_for_later_siblings(v
     TEST_ASSERT_TRUE_MESSAGE(
         log_contains("definitely_not_a_widget"),
         "an unknown tag must be reported by name - it is almost always a stale binary");
-    TEST_ASSERT_TRUE(log_contains("corrupts the parent stack"));
+    TEST_ASSERT_TRUE_MESSAGE(
+        log_contains("is not a known widget/element/component/slot"),
+        "the unknown tag must still be diagnosed, not silently absorbed");
 
     probe_rec_t * a     = probe_by_id("a");
     probe_rec_t * inner = probe_by_id("inner");
     probe_rec_t * after = probe_by_id("after");
 
-    /* Up to the unknown tag everything is still correct: the unknown element
-     * pushes nothing, so its child sees `a`. */
+    /* The unknown element pushes a frame repeating the current parent, so its
+     * child attaches to the nearest real ancestor. */
     TEST_ASSERT_EQUAL_PTR_MESSAGE(root, a->parent_at_create, "the first probe is unaffected");
     TEST_ASSERT_EQUAL_PTR_MESSAGE(a->created, inner->parent_at_create,
-                                  "a child of the unknown tag still sees the last real parent");
+                                  "a child of the unknown tag attaches to the last real parent");
 
-    /* The damage: </definitely_not_a_widget> popped `a`, then </probe> popped
-     * the view root, so the next sibling gets the screen. */
+    /* The point of the fix: the following sibling is still inside the component. */
     TEST_ASSERT_EQUAL_PTR_MESSAGE(
-        screen, after->parent_at_create,
-        "PINS CURRENT BEHAVIOUR: the sibling after an unknown tag currently escapes onto the screen");
-    TEST_ASSERT_TRUE_MESSAGE(after->parent_at_create != root,
-                             "if this starts failing the parent-stack imbalance was fixed");
-    TEST_ASSERT_EQUAL_PTR(screen, lv_obj_get_parent(after->created));
+        root, after->parent_at_create,
+        "the sibling after an unknown tag escaped the component - the unknown tag's "
+        "open/close are unbalanced again");
+    TEST_ASSERT_EQUAL_PTR_MESSAGE(root, lv_obj_get_parent(after->created),
+                                  "the sibling after an unknown tag was built on the wrong parent");
+
+    /* Read from the other end: the whole subtree is under the view root and the
+     * screen holds only the component. */
+    ASSERT_CHILD_COUNT(root, 2);        /* a, after */
+    ASSERT_CHILD_COUNT(a->created, 1);  /* inner */
+    ASSERT_CHILD_COUNT(screen, 1);      /* root */
 }
 
 /*---------------------------------------------------------------------------
@@ -639,16 +686,16 @@ int main(void)
     RUN_TEST(test_start_section_maps_every_block_name_to_its_section);
     RUN_TEST(test_start_section_leaves_the_section_alone_for_a_non_block_tag);
     RUN_TEST(test_stop_opens_a_gradient_stop_only_inside_a_gradients_block);
-    RUN_TEST(test_end_section_pops_the_blocks_that_declare_a_closer);
-    RUN_TEST(test_end_section_does_not_pop_api_fonts_images_or_subjects);
-    RUN_TEST(test_params_closes_a_section_it_can_never_have_opened);
+    RUN_TEST(test_every_block_opener_is_popped_by_its_own_close_tag);
+    RUN_TEST(test_params_neither_opens_nor_closes_a_section);
+    RUN_TEST(test_a_stray_prop_after_the_api_block_is_not_accepted_as_a_param);
     RUN_TEST(test_gradient_stop_section_is_left_by_the_gradient_close_tag);
     RUN_TEST(test_unmatched_close_tags_do_not_corrupt_the_section_state);
     RUN_TEST(test_a_truncated_document_registers_nothing);
 
     RUN_TEST(test_state_accessors_report_the_enclosing_element_at_every_depth);
     RUN_TEST(test_parent_tracking_returns_to_the_enclosing_element_for_siblings);
-    RUN_TEST(test_an_unknown_tag_unbalances_the_parent_stack_for_later_siblings);
+    RUN_TEST(test_an_unknown_tag_keeps_the_parent_stack_balanced);
 
     return UNITY_END();
 }

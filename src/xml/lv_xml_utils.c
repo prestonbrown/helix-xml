@@ -109,6 +109,13 @@ lv_color_t lv_xml_to_color(const char * str)
 
 lv_opa_t lv_xml_to_opa(const char * str)
 {
+    /*An empty value is what a failed ${expr} splices in. Without this guard the
+     *percent check below evaluates str[lv_strlen(str) - 1], i.e. str[-1] -- one
+     *byte BEFORE the buffer -- so a stray '%' sitting in front of the string
+     *scaled the result by 255/100. Same hardening lv_xml_to_size() already has
+     *(#1121).*/
+    if(str == NULL || str[0] == '\0') return 0;
+
     int32_t v = lv_xml_atoi(str);
     size_t len = lv_strlen(str);
     if(str[len - 1] == '%') {
@@ -130,8 +137,15 @@ int32_t lv_xml_atoi_split(const char ** str, char delimiter)
     int32_t result = 0;
     int sign = 1;
 
-    /* Skip leading whitespace and repeated delimiters */
-    while(*s == delimiter || *s == ' ' || *s == '\t') s++;
+    /* Skip leading whitespace and repeated delimiters.
+     *
+     * The `*s != '\0'` term is load-bearing: lv_xml_atoi() calls in with
+     * delimiter == '\0', so without it the NUL terminator itself matched
+     * `*s == delimiter` and the loop walked PAST the end of the buffer, reading
+     * whatever followed until it hit a byte that was none of NUL/space/tab.
+     * lv_xml_atoi("") and lv_xml_atoi("   ") both did this. For a real
+     * delimiter the term changes nothing - '\0' never equalled it anyway. */
+    while(*s != '\0' && (*s == delimiter || *s == ' ' || *s == '\t')) s++;
 
     /* Handle optional sign */
     if(*s == '-') {
@@ -175,8 +189,10 @@ float lv_xml_atof_split(const char ** str, char delimiter)
     float result = 0.0f;
     int sign = 1;
 
-    /* Skip leading whitespace and repeated delimiters */
-    while(*s == delimiter || *s == ' ' || *s == '\t') s++;
+    /* Skip leading whitespace and repeated delimiters. The `*s != '\0'` term
+     * guards the delimiter == '\0' entry point (lv_xml_atof) against walking
+     * past the terminator - see the note in lv_xml_atoi_split(). */
+    while(*s != '\0' && (*s == delimiter || *s == ' ' || *s == '\t')) s++;
 
     /* Handle optional sign */
     if(*s == '-') {

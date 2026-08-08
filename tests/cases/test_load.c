@@ -384,39 +384,32 @@ static void test_a_null_default_asset_path_means_no_prefix(void)
                                      "NULL asset path did not reset the prefix to empty");
 }
 
+/* A compiled-in descriptor in STATIC storage - the shape an embedded app
+ * actually ships, and the one that used to be unusable here because scope
+ * teardown lv_free()'d every image src unconditionally. Zeroed by definition,
+ * so its first byte is < 0x20 and lv_image_src_get_type() classifies it as
+ * LV_IMAGE_SRC_VARIABLE rather than a filename. */
+static const lv_image_dsc_t STATIC_IMAGE_DSC;
+
 /**
  * Only FILE sources get the prefix. An in-memory lv_image_dsc_t is stored
- * verbatim - prefixing a pointer would corrupt it.
+ * verbatim - prefixing a pointer would corrupt it - and, because the engine
+ * never copied it, teardown must not free it either.
  *
- * PINS CURRENT BEHAVIOUR - suspected bug, and the reason the descriptor below
- * is lv_malloc'd instead of being the obvious `static const lv_image_dsc_t`:
- * lv_xml_register_image() (lv_xml.c) only lv_strdup()s FILE sources and stores
- * every other source pointer verbatim, but scope teardown
- * (lv_xml_component.c, the LV_LL_READ over scope->image_ll) calls
- * lv_free(image->src) on ALL of them. So registering a statically allocated
- * lv_image_dsc_t - which is how essentially every embedded app supplies an
- * image - hands a non-heap pointer to lv_free() at lv_xml_deinit() time. On
- * this suite's builtin allocator that corrupts the pool and segfaults in
- * block_link_next(); verified by flipping this one allocation back to static.
- *
- * The heap descriptor below is never freed by the test: ownership is taken by
- * the engine, which is exactly the assumption the bug is made of. If the free
- * is ever made conditional on the source type, this test keeps passing and the
- * static form becomes usable again.
+ * The descriptor below is deliberately `static const`. That is the whole point:
+ * lv_xml_register_image() only lv_strdup()s FILE sources, so freeing every
+ * image src at scope teardown handed rodata to lv_free() and segfaulted in
+ * tlsf's block_link_next(). Getting through tearDown() is half the assertion.
  */
 static void test_the_default_asset_path_does_not_touch_in_memory_image_sources(void)
 {
-    /* Zeroed, so the first byte is < 0x20 and lv_image_src_get_type()
-     * classifies it as LV_IMAGE_SRC_VARIABLE rather than a filename. */
-    lv_image_dsc_t * dsc = lv_malloc_zeroed(sizeof(lv_image_dsc_t));
-    TEST_ASSERT_NOT_NULL(dsc);
-
     lv_xml_component_scope_t * scope = make_probe_scope("asset_probe");
 
     lv_xml_set_default_asset_path("A:/opt/ui/");
-    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_register_image(scope, "mem", dsc));
+    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK,
+                          (int)lv_xml_register_image(scope, "mem", &STATIC_IMAGE_DSC));
 
-    TEST_ASSERT_EQUAL_PTR_MESSAGE(dsc, lv_xml_get_image(scope, "mem"),
+    TEST_ASSERT_EQUAL_PTR_MESSAGE(&STATIC_IMAGE_DSC, lv_xml_get_image(scope, "mem"),
                                   "an in-memory image source was rewritten by the asset path");
 }
 

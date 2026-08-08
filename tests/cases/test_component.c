@@ -16,13 +16,6 @@
  * ---------------------------------------------------------------------------
  * NOT TESTED, DELIBERATELY
  *
- *  - Passing a value at create time for a prop that was never declared in
- *    `<api>`. resolve_params() looks the type up first (`get_param_type()`
- *    returns NULL), warns, and then - because a value WAS supplied and does not
- *    start with '$' - falls into `lv_streq(type, "style")` with type == NULL.
- *    lv_strcmp dereferences unconditionally, so this is a NULL-deref crash, not
- *    a testable behaviour. See lv_xml.c resolve_params(). The other half of the
- *    case (undeclared prop referenced, no value supplied) is safe and IS tested.
  *  - lv_xml_component_get_scope(NULL) is guarded and returns NULL, but
  *    lv_xml_register_component_from_data(NULL, ...) is not: it lv_streq()s the
  *    name immediately.
@@ -315,6 +308,69 @@ static void test_a_prop_referenced_but_never_declared_warns_and_drops_the_attrib
         "an undeclared prop reference must be reported - the dropped attribute is invisible otherwise");
 
     ASSERT_LABEL_TEXT(ASSERT_NAMED(inst, "missing_undeclared"), LV_LABEL_DEFAULT_TEXT);
+}
+
+/**
+ * The other half of the undeclared-prop case: a value IS supplied at create time
+ * for a name no `<prop>` declares - an ordinary typo in a caller's attribute list.
+ *
+ * get_param_type() returns NULL, and resolve_params() used to warn and then fall
+ * straight through to `lv_streq(type, "style")` because a value was present and
+ * did not start with '$'. lv_strcmp dereferences unconditionally, so this was a
+ * NULL-deref crash reachable from perfectly ordinary XML. It must warn and drop
+ * the attribute, exactly like the no-value case above.
+ */
+static void test_a_value_supplied_for_an_undeclared_prop_warns_and_does_not_crash(void)
+{
+    ASSERT_XML_REGISTERS("prop_missing", PROP_MISSING_XML);
+
+    /* "never_declared" appears in the view as $never_declared but in no <api>. */
+    const char * attrs[] = {"never_declared", "supplied by the caller", NULL, NULL};
+
+    log_capture_start();
+    lv_obj_t * inst = XML_CREATE(helix_test_env_screen(), "prop_missing", attrs);
+    helix_test_pump(30);
+    log_capture_stop();
+
+    TEST_ASSERT_TRUE_MESSAGE(
+        log_contains("'never_declared' parameter is not defined on 'prop_missing'"),
+        "supplying a value for an undeclared prop must still be reported");
+
+    /* Dropped, not applied: an undeclared prop is not part of the component's
+     * contract, so its value must not reach the widget. */
+    ASSERT_LABEL_TEXT(ASSERT_NAMED(inst, "missing_undeclared"), LV_LABEL_DEFAULT_TEXT);
+}
+
+/**
+ * Same crash, reached through the `$prop|ref` form that hidden_if_prop_eq uses.
+ * The pipe path resolves only the name before the '|', so an undeclared name
+ * there hit the identical NULL `type`.
+ */
+static void test_an_undeclared_prop_with_a_pipe_suffix_warns_and_does_not_crash(void)
+{
+    static const char * PIPE_MISSING_XML =
+        "<component>"
+        "  <api>"
+        "    <prop name=\"declared\" type=\"string\" default=\"d\"/>"
+        "  </api>"
+        "  <view extends=\"lv_obj\" name=\"pipe_root\">"
+        "    <lv_obj name=\"pipe_box\" hidden_if_prop_eq=\"$nope|yes\"/>"
+        "  </view>"
+        "</component>";
+
+    ASSERT_XML_REGISTERS("pipe_missing", PIPE_MISSING_XML);
+
+    const char * attrs[] = {"nope", "yes", NULL, NULL};
+
+    log_capture_start();
+    lv_obj_t * inst = XML_CREATE(helix_test_env_screen(), "pipe_missing", attrs);
+    helix_test_pump(30);
+    log_capture_stop();
+
+    TEST_ASSERT_NOT_NULL_MESSAGE(inst, "creating with an undeclared piped prop must not crash");
+    TEST_ASSERT_TRUE_MESSAGE(
+        log_contains("'nope' parameter is not defined on 'pipe_missing'"),
+        "an undeclared prop behind a pipe suffix must still be reported");
 }
 
 /**
@@ -795,6 +851,8 @@ int main(void)
     RUN_TEST(test_a_prop_passed_at_create_time_overrides_its_default);
     RUN_TEST(test_a_subject_typed_prop_produces_a_live_binding);
     RUN_TEST(test_a_prop_referenced_but_never_declared_warns_and_drops_the_attribute);
+    RUN_TEST(test_a_value_supplied_for_an_undeclared_prop_warns_and_does_not_crash);
+    RUN_TEST(test_an_undeclared_prop_with_a_pipe_suffix_warns_and_does_not_crash);
     RUN_TEST(test_a_declared_prop_with_no_default_and_no_value_is_dropped_silently);
 
     RUN_TEST(test_consts_resolve_in_attribute_values);

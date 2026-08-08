@@ -50,9 +50,10 @@
  *    process takes SIGABRT. That is an allocator assert under this file's
  *    4 MB test heap, not a parser defect, and encoding it would pin a number
  *    that moves with lv_conf.h. The depths exercised below stay 4x clear of it.
- *  - Style selectors of 256+ characters. tests/cases/test_base_types.c
- *    documents lv_xml_style_selector_text_to_enum() reading past the end of its
- *    256-byte stack buffer; a test must not encode a buffer overread.
+ *  - Style selectors of 256+ characters. Now bounded and covered directly at
+ *    the converter in tests/cases/test_base_types.c
+ *    (test_style_selector_longer_than_the_buffer_is_truncated_not_overread);
+ *    routing one through a whole document adds no coverage.
  * ---------------------------------------------------------------------------
  *
  * SPDX-License-Identifier: MIT

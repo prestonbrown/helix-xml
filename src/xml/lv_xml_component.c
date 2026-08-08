@@ -431,10 +431,16 @@ static void component_scope_free(lv_xml_component_scope_t * scope)
     }
     lv_ll_clear(&scope->font_ll);
 
+    /* `name` is always lv_strdup()'d by lv_xml_register_image(), so it is
+     * unconditionally ours. `src` is NOT: only the LV_IMAGE_SRC_FILE branch
+     * allocates a prefixed copy. A VARIABLE or SYMBOL source is the caller's
+     * pointer, typically a compiled-in `static const lv_image_dsc_t` - handing
+     * that to lv_free() corrupts the allocator pool (a segfault in tlsf's
+     * block_link_next() on the builtin allocator). */
     lv_xml_image_t * image;
     LV_LL_READ(&scope->image_ll, image) {
         lv_free((char *)image->name);
-        lv_free((char *)image->src);
+        if(image->src_is_owned) lv_free((char *)image->src);
     }
     lv_ll_clear(&scope->image_ll);
 

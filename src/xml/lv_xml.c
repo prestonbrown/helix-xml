@@ -902,9 +902,14 @@ lv_result_t lv_xml_register_image(lv_xml_component_scope_t * scope, const char *
         char buf[LV_XML_MAX_PATH_LENGTH];
         lv_snprintf(buf, sizeof(buf), "%s%s", xml_path_prefix, src);
         img->src = lv_strdup(buf);
+        img->src_is_owned = true;
     }
     else {
+        /* VARIABLE (an lv_image_dsc_t) or SYMBOL: stored verbatim, owned by the
+         * caller. Usually a compiled-in `static const lv_image_dsc_t`, so this
+         * pointer must never reach lv_free() - see component_scope_free(). */
         img->src = src;
+        img->src_is_owned = false;
     }
 
     return LV_RESULT_OK;
@@ -1096,7 +1101,17 @@ static void resolve_params(lv_xml_parser_state_t * state, lv_xml_component_scope
 
             const char * type = get_param_type(item_scope, lookup_name);
             if(type == NULL) {
+                /*Not declared in <api>, so there is no type to resolve against and
+                 *no default to fall back on. Drop the attribute, exactly as the
+                 *"declared but unset with no default" path below does. Falling
+                 *through with type == NULL used to reach lv_streq(type, "style")
+                 *whenever a value WAS supplied - lv_strcmp dereferences
+                 *unconditionally, so an ordinary typo'd prop name was a NULL-deref
+                 *crash rather than a warning.*/
                 LV_LOG_WARN("'%s' parameter is not defined on '%s'", lookup_name, item_scope->name);
+                item_attrs[i] = "";
+                item_attrs[i + 1] = "";
+                continue;
             }
             const char * ext_value = lv_xml_get_value_of(parent_attrs, lookup_name);
             if(ext_value) {

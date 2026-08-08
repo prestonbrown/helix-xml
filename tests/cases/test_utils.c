@@ -18,28 +18,14 @@
  * that calls them would "pass" on a plain build and blow up under the ASAN
  * job, so they are documented here instead of exercised:
  *
- *  - lv_xml_atoi(""), lv_xml_atoi("   "), lv_xml_atof(""), lv_xml_atof("  ")
- *    BUG: both delegate to *_split with delimiter '\0'. The leading-skip loop
- *    is `while(*s == delimiter || *s == ' ' || *s == '\t') s++;` so with
- *    delimiter == '\0' it steps PAST the NUL terminator and keeps reading
- *    whatever follows the buffer until it hits a byte that is none of those
- *    three. The result depends on unrelated memory.
- *    Empty/blank input IS covered here through the *_split entry points with a
- *    real delimiter, where the same loop terminates correctly.
- *
- *  - lv_xml_to_opa(""), lv_xml_to_opa("  ")
- *    BUG: reads `str[lv_strlen(str) - 1]`, i.e. str[-1] for the empty string -
- *    one byte BEFORE the buffer - and also inherits the atoi over-read above.
- *    lv_xml_to_size was hardened against exactly this (#1121); to_opa was not.
- *
  *  - lv_xml_atoi / lv_xml_atoi_split on values that do not fit in int32_t.
  *    There is no overflow check at all (`result = result * 10 + digit`), so it
  *    is signed-overflow UB rather than a defined wrap. Overflow IS covered on
  *    lv_xml_strtol, which does check.
  *
- *  - NULL into lv_xml_atoi/atof/to_color/to_opa/to_bool/strtol/split_str.
- *    None of them guard; they dereference immediately. Only
- *    lv_xml_get_value_of guards its arguments, and that IS tested.
+ *  - NULL into lv_xml_atoi/atof/to_color/to_bool/strtol/split_str. None of them
+ *    guard; they dereference immediately. lv_xml_to_opa and
+ *    lv_xml_get_value_of do guard, and both ARE tested.
  *
  *  - lv_xml_split_str(&p, '\0') on an empty string: the skip loop
  *    `while(**src == '\0') (*src)++;` never terminates.
@@ -199,6 +185,40 @@ static void test_atoi_returns_zero_for_malformed_input(void)
     TEST_ASSERT_EQUAL_INT32(0, lv_xml_atoi("- 5"));
     /* No hex support: 'x' terminates the digit run. */
     TEST_ASSERT_EQUAL_INT32(0, lv_xml_atoi("0x10"));
+}
+
+/**
+ * lv_xml_atoi() delegates to lv_xml_atoi_split() with delimiter == '\0', so the
+ * leading-skip loop `while(*s == delimiter || *s == ' ' || *s == '\t') s++;`
+ * matched the NUL terminator itself and walked PAST the end of the buffer,
+ * reading on until it hit a byte that was none of NUL/space/tab.
+ *
+ * A string literal cannot prove this: what follows it in rodata is whatever the
+ * linker put there, so the test would pass or fail on link order. These buffers
+ * CONTROL the bytes after the terminator. An in-bounds parser cannot tell the
+ * two apart; the over-reading one returns 42 for the poisoned buffer.
+ */
+static void test_atoi_empty_and_blank_input_does_not_read_past_the_terminator(void)
+{
+    /* "" followed by digits, vs "" followed by NULs. */
+    char poisoned[8] = {'\0', '4', '2', '\0', '\0', '\0', '\0', '\0'};
+    char benign[8] = {'\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0'};
+
+    TEST_ASSERT_EQUAL_INT32_MESSAGE(lv_xml_atoi(benign), lv_xml_atoi(poisoned),
+                                    "lv_xml_atoi(\"\") read past the NUL - the result changed with "
+                                    "digits sitting after the terminator");
+    TEST_ASSERT_EQUAL_INT32_MESSAGE(0, lv_xml_atoi(poisoned),
+                                    "an empty value parses as 0");
+
+    /* Same again for all-whitespace input: the skip loop consumes the blanks and
+     * then meets the terminator, which is where it used to step over it. */
+    char blank_poisoned[8] = {' ', ' ', '\0', '7', '3', '\0', '\0', '\0'};
+    char blank_benign[8] = {' ', ' ', '\0', '\0', '\0', '\0', '\0', '\0'};
+
+    TEST_ASSERT_EQUAL_INT32_MESSAGE(lv_xml_atoi(blank_benign), lv_xml_atoi(blank_poisoned),
+                                    "lv_xml_atoi(\"  \") read past the NUL");
+    TEST_ASSERT_EQUAL_INT32_MESSAGE(0, lv_xml_atoi(blank_poisoned),
+                                    "an all-whitespace value parses as 0");
 }
 
 static void test_atoi_split_advances_past_the_delimiter(void)
@@ -456,6 +476,41 @@ static void test_to_opa_returns_zero_for_malformed_input(void)
     /* Symbolic opacity names are NOT supported - they parse as 0. */
     TEST_ASSERT_EQUAL_UINT8(0, lv_xml_to_opa("transp"));
     TEST_ASSERT_EQUAL_UINT8(0, lv_xml_to_opa("cover"));
+}
+
+/**
+ * The percent check was written as `str[lv_strlen(str) - 1]`, which for the
+ * empty string indexes str[-1] - one byte BEFORE the buffer. Whatever sat there
+ * decided the answer: a stray '%' scaled the parsed value by 255/100.
+ *
+ * A string literal would make this depend on rodata layout, so these buffers
+ * CONTROL the predecessor byte. An in-bounds parser cannot distinguish them.
+ * Same shape as test_to_size_empty_string_does_not_read_the_byte_before_it in
+ * test_base_types.c - lv_xml_to_size was hardened against this in #1121 and
+ * lv_xml_to_opa was not.
+ */
+static void test_to_opa_empty_string_does_not_read_the_byte_before_it(void)
+{
+    char poisoned[4] = {'%', '\0', '\0', '\0'};
+    char benign[4] = {'x', '\0', '\0', '\0'};
+
+    lv_opa_t after_pct = lv_xml_to_opa(poisoned + 1);
+    lv_opa_t after_x = lv_xml_to_opa(benign + 1);
+
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(after_x, after_pct,
+                                    "lv_xml_to_opa(\"\") read the byte before the string - the "
+                                    "result changed with a '%' sitting in front of the NUL");
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(0, after_pct, "an absent opacity is 0");
+}
+
+/** The only NULL-guarded converter in this file besides lv_xml_get_value_of. */
+static void test_to_opa_guards_null_and_empty(void)
+{
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(0, lv_xml_to_opa(NULL), "lv_xml_to_opa() must guard NULL");
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(0, lv_xml_to_opa(""),
+                                    "an empty value (what a failed ${expr} splices in) must be 0");
+    /* All-whitespace goes through the same guard-less path into atoi. */
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(0, lv_xml_to_opa("  "), "a blank value must be 0");
 }
 
 /*===========================================================================
@@ -734,6 +789,7 @@ int main(void)
     RUN_TEST(test_atoi_skips_leading_whitespace);
     RUN_TEST(test_atoi_stops_at_the_first_non_digit);
     RUN_TEST(test_atoi_returns_zero_for_malformed_input);
+    RUN_TEST(test_atoi_empty_and_blank_input_does_not_read_past_the_terminator);
     RUN_TEST(test_atoi_split_advances_past_the_delimiter);
     RUN_TEST(test_atoi_split_skips_repeated_delimiters_and_blanks);
     RUN_TEST(test_atoi_split_handles_empty_and_malformed_input);
@@ -757,6 +813,8 @@ int main(void)
     RUN_TEST(test_to_opa_accepts_percentages);
     RUN_TEST(test_to_opa_clamps_out_of_range_values);
     RUN_TEST(test_to_opa_returns_zero_for_malformed_input);
+    RUN_TEST(test_to_opa_empty_string_does_not_read_the_byte_before_it);
+    RUN_TEST(test_to_opa_guards_null_and_empty);
 
     /* lv_xml_to_bool */
     RUN_TEST(test_to_bool_accepts_only_the_exact_string_false);

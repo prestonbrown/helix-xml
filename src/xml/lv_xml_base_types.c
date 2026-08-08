@@ -604,7 +604,17 @@ lv_style_selector_t lv_xml_style_selector_text_to_enum(const char * str)
     if(str == NULL) return 0;
     lv_style_selector_t selector = 0;
     char buf[256];
+
+    /* lv_strncpy() mirrors strncpy(): when the source is at least dst_size bytes
+     * it fills the buffer and writes NO terminator. The split loop below then
+     * ran off the end of this stack buffer. Terminate explicitly and say so,
+     * rather than truncating into a bogus "unknown token" warning. */
+    if(lv_strlen(str) >= sizeof(buf)) {
+        LV_LOG_WARN("style selector is longer than %d characters and was truncated",
+                    (int)sizeof(buf) - 1);
+    }
     lv_strncpy(buf, str, sizeof(buf));
+    buf[sizeof(buf) - 1] = '\0';
 
     char * bufp = buf;
     const char * next = lv_xml_split_str(&bufp, '|');

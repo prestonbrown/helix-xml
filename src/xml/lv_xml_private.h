@@ -41,6 +41,12 @@ typedef struct {
 typedef struct {
     const char * name;
     const void * src;
+    /** True only when `src` is the lv_strdup()'d, asset-path-prefixed copy that
+     *  lv_xml_register_image() makes for LV_IMAGE_SRC_FILE sources. VARIABLE and
+     *  SYMBOL sources are stored verbatim and belong to the caller - typically a
+     *  compiled-in `static const lv_image_dsc_t`, which is not a heap address at
+     *  all. Scope teardown must consult this before calling lv_free(). */
+    bool src_is_owned;
 } lv_xml_image_t;
 
 typedef struct {

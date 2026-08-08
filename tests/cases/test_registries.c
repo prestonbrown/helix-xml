@@ -27,12 +27,8 @@
  *  - lv_xml_register_image() with a src whose first byte is >= 0x80
  *    (LV_IMAGE_SRC_SYMBOL): stored verbatim like the VARIABLE case, so it adds
  *    no distinct behaviour over the two cases that are tested.
- *  - lv_xml_register_image() with a src in STATIC storage (the normal way an
- *    app ships a compiled-in lv_image_dsc_t). Scope teardown lv_free()s every
- *    image src unconditionally, so a non-heap address aborts inside tlsf rather
- *    than failing an assertion. See the note on
- *    test_registering_a_variable_image_stores_the_pointer_unchanged, which pins
- *    the storage rule using heap-allocated storage instead.
+ *    (STATIC storage for a VARIABLE src IS tested now - see
+ *    test_registering_a_variable_image_stores_the_pointer_unchanged.)
  * ---------------------------------------------------------------------------
  *
  * SPDX-License-Identifier: MIT
@@ -459,36 +455,69 @@ static void test_registering_a_file_image_stores_a_prefixed_copy(void)
                                      "changing the asset path must not rewrite already-registered images");
 }
 
+/* A compiled-in image descriptor in STATIC storage - the normal way an embedded
+ * app ships artwork, and the shape that used to abort inside tlsf at teardown.
+ * Zeroed by definition, so its first byte is < 0x20 and lv_image_src_get_type()
+ * classifies it as LV_IMAGE_SRC_VARIABLE. Never decoded - only stored and
+ * returned. `const` on purpose: this is rodata, not a heap block. */
+static const lv_image_dsc_t STATIC_IMAGE_DSC;
+
 /**
- * A variable (lv_image_dsc_t) source is stored verbatim - no copy, no prefix.
+ * A variable (lv_image_dsc_t) source is stored verbatim - no copy, no prefix -
+ * and scope teardown must NOT free it.
  *
- * PINS CURRENT BEHAVIOUR - suspected bug: the descriptor here is lv_malloc'd
- * and then deliberately never freed by this test, because scope teardown frees
- * it. component_scope_free() (lv_xml_component.c) does an unconditional
- * `lv_free((char *)image->src)` on every image_ll record, but only the FILE
- * branch of lv_xml_register_image() allocates that pointer - a VARIABLE source
- * belongs to the caller. Registering a compiled-in `lv_image_dsc_t` (a static,
- * or a C-array image, which is the normal way an app ships artwork) therefore
- * hands a non-heap address to lv_free() at teardown: an immediate tlsf abort,
- * verified by writing this test with a `static lv_image_dsc_t` first. Using
- * heap storage is what makes the case testable at all; the ownership rule
- * itself is still wrong.
+ * Only the LV_IMAGE_SRC_FILE branch of lv_xml_register_image() allocates the
+ * stored pointer (an lv_strdup of the asset-path-prefixed name); a VARIABLE or
+ * SYMBOL source belongs to the caller. component_scope_free() used to
+ * lv_free() every image_ll record's src unconditionally, so registering a
+ * `static const lv_image_dsc_t` handed a rodata address to the allocator - a
+ * segfault in tlsf's block_link_next(), not a clean assertion failure.
+ *
+ * Using genuinely static storage here IS the regression guard: the teardown
+ * that runs in tearDown() is the assertion. If the conditional free regresses,
+ * this test dies in the allocator rather than reporting a failure - which is
+ * precisely the bug's signature.
  */
 static void test_registering_a_variable_image_stores_the_pointer_unchanged(void)
 {
-    /* Zeroed, so its first byte is < 0x20 and lv_image_src_get_type() classifies
-     * it as LV_IMAGE_SRC_VARIABLE. Never decoded - only stored and returned. */
-    lv_image_dsc_t * dsc = lv_malloc(sizeof(lv_image_dsc_t));
-    TEST_ASSERT_NOT_NULL(dsc);
-    lv_memzero(dsc, sizeof(*dsc));
-
     lv_xml_set_default_asset_path("A:ui/");
-    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_register_image(NULL, "dsc_img", dsc));
+    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK,
+                          (int)lv_xml_register_image(NULL, "dsc_img", &STATIC_IMAGE_DSC));
 
-    TEST_ASSERT_EQUAL_PTR_MESSAGE(dsc, lv_xml_get_image(NULL, "dsc_img"),
+    TEST_ASSERT_EQUAL_PTR_MESSAGE(&STATIC_IMAGE_DSC, lv_xml_get_image(NULL, "dsc_img"),
                                   "a variable image source must be stored as-is, not copied or prefixed");
 
-    /* No lv_free(dsc) - scope teardown takes it. See the note above. */
+    /* Nothing to free: the engine must not have taken ownership. Teardown
+     * proves it. */
+}
+
+/**
+ * The other half of the ownership rule: a FILE source IS copied, so teardown
+ * must still free it. Registering one and letting the scope die exercises the
+ * owned path - under ASAN a regression to "never free" shows up as a leak, and
+ * a regression to "always free" is caught by the static-descriptor test above.
+ *
+ * Both kinds live in the same scope here so a single teardown walks a mixed
+ * image_ll, which is what a real app's globals scope looks like.
+ */
+static void test_a_file_image_source_is_copied_and_a_static_one_is_not(void)
+{
+    lv_xml_set_default_asset_path("A:ui/");
+
+    const char * caller_path = "logo.png";
+    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_register_image(NULL, "file_img", caller_path));
+    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK,
+                          (int)lv_xml_register_image(NULL, "static_img", &STATIC_IMAGE_DSC));
+
+    const void * stored_file = lv_xml_get_image(NULL, "file_img");
+    TEST_ASSERT_NOT_NULL(stored_file);
+    TEST_ASSERT_TRUE_MESSAGE(stored_file != (const void *)caller_path,
+                             "a FILE source must be copied, not aliased to the caller's string");
+    TEST_ASSERT_EQUAL_STRING_MESSAGE("A:ui/logo.png", (const char *)stored_file,
+                                     "a FILE source must be prefixed with the asset path");
+
+    TEST_ASSERT_EQUAL_PTR_MESSAGE(&STATIC_IMAGE_DSC, lv_xml_get_image(NULL, "static_img"),
+                                  "a static descriptor must be stored unchanged alongside file sources");
 }
 
 /**
@@ -739,6 +768,7 @@ int main(void)
 
     RUN_TEST(test_registering_a_file_image_stores_a_prefixed_copy);
     RUN_TEST(test_registering_a_variable_image_stores_the_pointer_unchanged);
+    RUN_TEST(test_a_file_image_source_is_copied_and_a_static_one_is_not);
     RUN_TEST(test_an_absent_image_warns_but_an_empty_or_null_name_is_silent);
 
     RUN_TEST(test_registering_an_event_cb_makes_it_findable_by_name);

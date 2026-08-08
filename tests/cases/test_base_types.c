@@ -23,12 +23,8 @@
  *    lv_xml_style_selector_text_to_enum. The rest pass the pointer straight to
  *    lv_strcmp, which dereferences unconditionally. The two that DO guard are
  *    tested.
- *  - lv_xml_to_size(" ") and other all-whitespace input: the guard only checks
- *    txt[0] == '\0', so a blank string still reaches lv_xml_atoi and trips its
- *    read-past-the-NUL bug (see tests/cases/test_utils.c header).
- *  - lv_xml_style_selector_text_to_enum() with a >= 256 character argument:
- *    lv_strncpy does not NUL-terminate on truncation, so the split loop reads
- *    off the end of the 256-byte stack buffer.
+ *    (lv_xml_to_size(" ") and other all-whitespace input IS safe now that
+ *    lv_xml_atoi no longer reads past the NUL - see tests/cases/test_utils.c.)
  * ---------------------------------------------------------------------------
  *
  * SPDX-License-Identifier: MIT
@@ -1137,6 +1133,65 @@ static void test_style_selector_does_not_warn_for_known_zero_valued_tokens(void)
                               "a recognised token that evaluates to 0 must not be reported as unknown");
 }
 
+/**
+ * A selector of 256 characters or more.
+ *
+ * The function copies into `char buf[256]` with lv_strncpy(), which mirrors
+ * strncpy(): when the source is at least dst_size bytes it fills the buffer and
+ * writes NO terminator. The split loop then ran off the end of that stack
+ * buffer, reading whatever the frame happened to hold.
+ *
+ * The input is built so the over-read is observable rather than merely
+ * undefined: the first 255 bytes are padding tokens, so an in-bounds parse
+ * yields nothing but "unknown token" warnings and a selector of 0. Only a read
+ * past the buffer can pick up anything else - and under ASAN it is a hard
+ * stack-buffer-overflow.
+ */
+static void test_style_selector_longer_than_the_buffer_is_truncated_not_overread(void)
+{
+    /* 300 'a's: one token, far longer than the 256-byte copy buffer. */
+    char oversized[301];
+    lv_memset(oversized, 'a', sizeof(oversized) - 1);
+    oversized[sizeof(oversized) - 1] = '\0';
+
+    log_capture_start();
+    lv_style_selector_t sel = lv_xml_style_selector_text_to_enum(oversized);
+    log_capture_stop();
+
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(0, sel,
+                                     "an oversized selector names no state or part, so it is 0");
+    TEST_ASSERT_TRUE_MESSAGE(log_contains("truncated"),
+                             "an over-length selector must say it was truncated, not silently "
+                             "read past the copy buffer");
+
+    /* Exactly 256 bytes of content is the boundary: lv_strncpy() fills the
+     * buffer completely and leaves no room for the terminator. */
+    char exact[257];
+    lv_memset(exact, 'b', sizeof(exact) - 1);
+    exact[sizeof(exact) - 1] = '\0';
+
+    log_capture_start();
+    lv_style_selector_t sel_exact = lv_xml_style_selector_text_to_enum(exact);
+    log_capture_stop();
+
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(0, sel_exact, "a 256-byte selector still resolves to 0");
+    TEST_ASSERT_TRUE_MESSAGE(log_contains("truncated"),
+                             "256 bytes is already over the limit - lv_strncpy() writes no "
+                             "terminator at exactly dst_size");
+
+    /* 255 bytes fits with room for the terminator: no truncation. */
+    char fits[256];
+    lv_memset(fits, 'c', sizeof(fits) - 1);
+    fits[sizeof(fits) - 1] = '\0';
+
+    log_capture_start();
+    (void)lv_xml_style_selector_text_to_enum(fits);
+    log_capture_stop();
+
+    TEST_ASSERT_FALSE_MESSAGE(log_contains("truncated"),
+                              "255 characters fit in the buffer and must not be reported truncated");
+}
+
 /** The caller's string must survive - the destructive split works on a copy. */
 static void test_style_selector_does_not_mutate_the_caller_string(void)
 {
@@ -1233,6 +1288,7 @@ int main(void)
     RUN_TEST(test_style_selector_guards_null_and_empty);
     RUN_TEST(test_style_selector_warns_but_still_drops_bad_tokens);
     RUN_TEST(test_style_selector_does_not_warn_for_known_zero_valued_tokens);
+    RUN_TEST(test_style_selector_longer_than_the_buffer_is_truncated_not_overread);
     RUN_TEST(test_style_selector_does_not_mutate_the_caller_string);
 
     return UNITY_END();

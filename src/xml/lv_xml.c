@@ -73,12 +73,87 @@
  *      TYPEDEFS
  **********************/
 
+/*---------------------------------------------------------------------------
+ * Optional create-cost profiling (compile with -DLV_XML_PROFILE=1)
+ *
+ * XML_Parse drives the element handlers, so the parse and the widget build are
+ * interleaved and a single timer around XML_Parse cannot tell them apart. Two
+ * accumulators separate them: `parse_ns` spans the whole XML_Parse call, and
+ * `handler_ns` sums only the time inside the element handlers, which is where
+ * resolve_params/resolve_consts, create_cb and apply_cb run. The difference is
+ * expat plus the SAX dispatch — the only part a build-time compiler removes.
+ *
+ * Off by default and costs nothing when off: with LV_XML_PROFILE unset every
+ * macro below expands to nothing. It is opt-in because a clock read per element
+ * would otherwise distort the very thing being measured.
+ *-------------------------------------------------------------------------*/
+#ifndef LV_XML_PROFILE
+#define LV_XML_PROFILE 0
+#endif
+
+#if LV_XML_PROFILE
+#include <time.h>
+static uint64_t xml_prof_create_count;
+static uint64_t xml_prof_view_bytes;
+static uint64_t xml_prof_parse_ns;
+static uint64_t xml_prof_handler_ns;
+static uint32_t xml_prof_handler_depth;   /*nested creates must not double-count*/
+
+static uint64_t xml_prof_now(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
+}
+
+static void lv_xml_profile_report(const char * tag)
+{
+    if(xml_prof_create_count == 0) return;
+    const uint64_t sax_ns = xml_prof_parse_ns > xml_prof_handler_ns
+                            ? xml_prof_parse_ns - xml_prof_handler_ns : 0;
+    LV_LOG_USER("XML profile (%s): %llu creates, %llu KB parsed, "
+                "parse %llu.%03llu ms, handlers %llu.%03llu ms, "
+                "SAX overhead %llu.%03llu ms (%llu%% of parse, lower bound)",
+                tag,
+                (unsigned long long)xml_prof_create_count,
+                (unsigned long long)(xml_prof_view_bytes / 1024),
+                (unsigned long long)(xml_prof_parse_ns / 1000000),
+                (unsigned long long)((xml_prof_parse_ns / 1000) % 1000),
+                (unsigned long long)(xml_prof_handler_ns / 1000000),
+                (unsigned long long)((xml_prof_handler_ns / 1000) % 1000),
+                (unsigned long long)(sax_ns / 1000000),
+                (unsigned long long)((sax_ns / 1000) % 1000),
+                (unsigned long long)(xml_prof_parse_ns ? (sax_ns * 100 / xml_prof_parse_ns) : 0));
+}
+
+#define XML_PROF_T0(var)          uint64_t var = xml_prof_now()
+#define XML_PROF_ADD(acc, t0)     do { (acc) += xml_prof_now() - (t0); } while(0)
+/*Only the outermost handler frame is timed: a nested component create runs its
+ *own handlers inside this one, and counting both would charge that work twice.*/
+#define XML_PROF_HANDLER_ENTER()  uint64_t _h0 = 0; \
+    if(xml_prof_handler_depth++ == 0) _h0 = xml_prof_now()
+#define XML_PROF_HANDLER_EXIT()   do { \
+        if(--xml_prof_handler_depth == 0) xml_prof_handler_ns += xml_prof_now() - _h0; \
+    } while(0)
+#else
+#define XML_PROF_T0(var)          do { } while(0)
+#define XML_PROF_ADD(acc, t0)     do { } while(0)
+#define XML_PROF_HANDLER_ENTER()  do { } while(0)
+#define XML_PROF_HANDLER_EXIT()   do { } while(0)
+#endif
+
 /**********************
  *  STATIC PROTOTYPES
  **********************/
 static void view_start_element_handler(void * user_data, const char * name, const char ** attrs);
 static void view_end_element_handler(void * user_data, const char * name);
 static void view_character_data_handler(void * user_data, const XML_Char * s, int len);
+/*Bodies live in the _impl functions; the handlers above are thin wrappers so the
+ *time spent building widgets can be separated from the time spent parsing. The
+ *bodies return early in many places, which a scope-based timer cannot follow.*/
+static void view_start_element_handler_impl(void * user_data, const char * name, const char ** attrs);
+static void view_end_element_handler_impl(void * user_data, const char * name);
+static void view_character_data_handler_impl(void * user_data, const XML_Char * s, int len);
 static void collapse_whitespace(char * s);
 static void apply_pending_inline_text(lv_xml_parser_state_t * state, const char * name);
 static void free_pcdata_ll(lv_xml_parser_state_t * state);
@@ -313,6 +388,10 @@ void lv_xml_init(void)
 
 void lv_xml_deinit(void)
 {
+#if LV_XML_PROFILE
+    lv_xml_profile_report("final");
+#endif
+
 #if LV_USE_TEST
     lv_xml_test_unregister();
 #endif
@@ -366,7 +445,30 @@ void * lv_xml_create_in_scope(lv_obj_t * parent, lv_xml_component_scope_t * pare
     XML_SetCharacterDataHandler(parser, view_character_data_handler);
 
     /* Parse the XML */
-    if(XML_Parse(parser, scope->view_def, lv_strlen(scope->view_def), XML_TRUE) == XML_STATUS_ERROR) {
+#if LV_XML_PROFILE
+    /*Only the outermost create is timed. A nested component parses its own view
+     *from inside an element handler of this one, so timing both would count the
+     *inner parse twice. The cost of those inner parses lands in the handler
+     *bucket instead, which makes the reported SAX share a LOWER BOUND.*/
+    const bool prof_outermost = (xml_prof_handler_depth == 0);
+    if(prof_outermost) {
+        xml_prof_create_count++;
+        xml_prof_view_bytes += (uint64_t)lv_strlen(scope->view_def);
+    }
+    XML_PROF_T0(prof_t0);
+#endif
+    const enum XML_Status parse_status =
+        XML_Parse(parser, scope->view_def, lv_strlen(scope->view_def), XML_TRUE);
+#if LV_XML_PROFILE
+    if(prof_outermost) {
+        XML_PROF_ADD(xml_prof_parse_ns, prof_t0);
+        /*Report as we go rather than only at deinit: the app's SIGTERM path exits
+         *fast and never calls lv_xml_deinit, and `ctl shutdown` currently hangs
+         *before reaching it, so an exit-time-only report is unreadable in practice.*/
+        if((xml_prof_create_count % 25) == 0) lv_xml_profile_report("running");
+    }
+#endif
+    if(parse_status == XML_STATUS_ERROR) {
         LV_LOG_WARN("XML parsing error: %s on line %lu", XML_ErrorString(XML_GetErrorCode(parser)),
                     XML_GetCurrentLineNumber(parser));
         /*An unclosed <repeat> leaves an active capture on state.context; free it.*/
@@ -1300,7 +1402,31 @@ static void collapse_whitespace(char * s)
     *dst = '\0';
 }
 
+/*Timing wrappers — see the note on the _impl prototypes. These are what expat
+ *calls; with LV_XML_PROFILE off they are a plain forwarding call the optimizer
+ *removes.*/
+static void view_start_element_handler(void * user_data, const char * name, const char ** attrs)
+{
+    XML_PROF_HANDLER_ENTER();
+    view_start_element_handler_impl(user_data, name, attrs);
+    XML_PROF_HANDLER_EXIT();
+}
+
+static void view_end_element_handler(void * user_data, const char * name)
+{
+    XML_PROF_HANDLER_ENTER();
+    view_end_element_handler_impl(user_data, name);
+    XML_PROF_HANDLER_EXIT();
+}
+
 static void view_character_data_handler(void * user_data, const XML_Char * s, int len)
+{
+    XML_PROF_HANDLER_ENTER();
+    view_character_data_handler_impl(user_data, s, len);
+    XML_PROF_HANDLER_EXIT();
+}
+
+static void view_character_data_handler_impl(void * user_data, const XML_Char * s, int len)
 {
     lv_xml_parser_state_t * state = (lv_xml_parser_state_t *)user_data;
     if(len <= 0) return;
@@ -2191,7 +2317,7 @@ static lv_subject_t * frag_cond_resolver(void * ctx, const char * name)
     return lv_xml_get_subject((lv_xml_component_scope_t *)ctx, name);
 }
 
-static void view_start_element_handler(void * user_data, const char * name, const char ** attrs)
+static void view_start_element_handler_impl(void * user_data, const char * name, const char ** attrs)
 {
     lv_xml_parser_state_t * state = (lv_xml_parser_state_t *)user_data;
 
@@ -2401,7 +2527,7 @@ static void view_start_element_handler(void * user_data, const char * name, cons
     }
 }
 
-static void view_end_element_handler(void * user_data, const char * name)
+static void view_end_element_handler_impl(void * user_data, const char * name)
 {
     lv_xml_parser_state_t * state = (lv_xml_parser_state_t *)user_data;
 

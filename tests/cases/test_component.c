@@ -1317,6 +1317,11 @@ static void test_the_instance_site_name_beats_the_view_name_and_reports_it(void)
     TEST_ASSERT_TRUE_MESSAGE(log_contains("takes precedence"),
                              "the override was not explained in the log");
 
+    /* Re-register so the nested half meets a scope that has not warned yet: the
+     * report is once per scope, and the two halves exercise two different call
+     * sites (lv_xml_create() above, lv_xml_component_process() below). */
+    register_naming_pair(" name=\"chrome\"", " name=\"header\"");
+
     log_capture_start();
     lv_obj_t * wrap = XML_CREATE(screen, "wrapper", NULL);
     log_capture_stop();
@@ -1325,6 +1330,44 @@ static void test_the_instance_site_name_beats_the_view_name_and_reports_it(void)
                                      "the instance-site name did not win on a nested instance");
     TEST_ASSERT_TRUE_MESSAGE(log_contains("chrome"),
                              "the displaced <view name> was dropped silently when nested");
+}
+
+/**
+ * The clash is a static property of the component definition, so repeating it on
+ * every instantiation only costs log room - one HelixScreen debug bundle carried
+ * 363 copies, 109 of them for one component, inside a ring that has to hold the
+ * whole session. Report it once per scope; re-registering reports it again.
+ */
+static void test_the_displaced_view_name_is_reported_once_per_scope(void)
+{
+    register_naming_pair(" name=\"chrome\"", " name=\"header\"");
+
+    lv_obj_t * screen = helix_test_env_screen();
+    static const char * site_attrs[] = {"name", "header", NULL};
+
+    log_capture_start();
+    XML_CREATE(screen, "inner", site_attrs);
+    log_capture_stop();
+    TEST_ASSERT_TRUE_MESSAGE(log_contains("takes precedence"),
+                             "the first instantiation did not report the override");
+
+    log_capture_start();
+    XML_CREATE(screen, "inner", site_attrs);
+    XML_CREATE(screen, "wrapper", NULL);
+    log_capture_stop();
+    TEST_ASSERT_FALSE_MESSAGE(log_contains("takes precedence"),
+                              "the override was re-reported on later instantiations of the same "
+                              "scope");
+
+    /* A fresh registration is a fresh definition, and may have been corrected -
+     * or not. Either way it is worth one report. */
+    register_naming_pair(" name=\"chrome\"", " name=\"header\"");
+
+    log_capture_start();
+    XML_CREATE(screen, "inner", site_attrs);
+    log_capture_stop();
+    TEST_ASSERT_TRUE_MESSAGE(log_contains("takes precedence"),
+                             "a re-registered component never reported its override again");
 }
 
 /** Agreeing names are not a conflict and must not be reported as one. */
@@ -1369,6 +1412,7 @@ int main(void)
     RUN_TEST(test_an_unnamed_root_gets_the_indexed_component_name);
     RUN_TEST(test_a_view_name_survives_when_the_instance_site_does_not_name_it);
     RUN_TEST(test_the_instance_site_name_beats_the_view_name_and_reports_it);
+    RUN_TEST(test_the_displaced_view_name_is_reported_once_per_scope);
     RUN_TEST(test_matching_view_and_instance_names_are_not_reported);
 
     RUN_TEST(test_get_scope_resolves_only_registered_names);

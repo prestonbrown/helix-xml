@@ -63,6 +63,14 @@ struct _lv_xml_component_scope_t {
      *  handed out to the surviving instances, so the memory is held until the
      *  last one is deleted. See component_scope_retire(). */
     uint32_t pending_free : 1;
+    /** Set once this scope has reported an instance-site `name` displacing the
+     *  one its own <view> sets. The condition is a static authoring defect, so
+     *  it is identical on every instantiation and re-reporting it says nothing
+     *  new: one HelixScreen debug bundle carried 363 copies of the warning,
+     *  109 of them for a single component. Re-registering the component builds
+     *  a fresh scope, so a corrected (or still-wrong) definition is reported
+     *  again on the next load. */
+    uint32_t name_clash_warned : 1;
     struct _lv_xml_component_scope_t * next;
 };
 

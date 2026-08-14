@@ -182,11 +182,12 @@ lv_obj_t * lv_xml_component_process(lv_xml_parser_state_t * state, const char * 
     /*Report an instance-site `name` displacing one the component set on its own
      *<view> root. Checked BEFORE apply_cb: apply_cb applies the instance-site
      *name itself and frees the string lv_obj_get_name() returns, so afterwards
-     *the two are indistinguishable.*/
-    {
+     *the two are indistinguishable. Once per scope - see `name_clash_warned`.*/
+    if(!scope->name_clash_warned) {
         const char * site_name = lv_xml_get_value_of(attrs, "name");
         const char * view_name = lv_obj_get_name(item);
         if(site_name && view_name && !lv_streq(view_name, site_name)) {
+            scope->name_clash_warned = 1;
             LV_LOG_WARN("Component '%s' sets name=\"%s\" on its own <view>; "
                         "the instance-site name=\"%s\" takes precedence",
                         scope->name, view_name, site_name);

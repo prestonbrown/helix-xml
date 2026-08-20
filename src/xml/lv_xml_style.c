@@ -371,6 +371,15 @@ const char * lv_xml_style_string_process(char * txt, lv_style_selector_t * selec
 
 lv_xml_style_t * lv_xml_get_style_by_name(lv_xml_component_scope_t * scope, const char * style_name_raw)
 {
+    /* Who is ASKING, before the `component.` prefix below reassigns `scope` to
+     * whoever OWNS the style. A hit in a different scope means a raw
+     * lv_style_t* is about to cross a scope boundary, which is the one thing
+     * the owner's instance counter cannot see - see `styles_borrowed`.
+     * Compared by name: a parse works off a by-value copy of the scope
+     * (lv_xml_create_in_scope: `state.scope = *scope`), so the pointers differ
+     * even when it is the same scope. */
+    const char * requester_name = (scope != NULL) ? scope->name : NULL;
+
     const char * style_name = strrchr(style_name_raw, '.');
 
     if(style_name) {
@@ -399,7 +408,15 @@ lv_xml_style_t * lv_xml_get_style_by_name(lv_xml_component_scope_t * scope, cons
 
     lv_xml_style_t * xml_style;
     LV_LL_READ(&scope->style_ll, xml_style) {
-        if(lv_streq(xml_style->name, style_name)) return xml_style;
+        if(lv_streq(xml_style->name, style_name)) {
+            /* `globals` is exempt: it is shared metadata, never retired, so its
+             * style storage cannot be pulled out from under a borrower. */
+            if(scope->name != NULL && requester_name != NULL &&
+               !lv_streq(scope->name, requester_name) && !lv_streq(scope->name, "globals")) {
+                scope->styles_borrowed = 1;
+            }
+            return xml_style;
+        }
     }
 
     /*If not found in the component check the global space*/

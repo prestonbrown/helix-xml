@@ -540,7 +540,14 @@ static void component_scope_drop_others(const char * name, const lv_xml_componen
  */
 static void component_scope_retire(lv_xml_component_scope_t * scope)
 {
-    if(scope->instance_cnt == 0) {
+    /* Two independent reasons to hold the storage. `instance_cnt` covers widgets
+     * built FROM this scope. `styles_borrowed` covers widgets built from a
+     * DIFFERENT scope that resolved one of our styles through the
+     * `component.style` form and are holding a raw lv_style_t* into our
+     * style_ll - the count never sees those, and for a styles-only library it is
+     * permanently zero, so freeing on the count alone handed a dangling style to
+     * every borrower. */
+    if(scope->instance_cnt == 0 && !scope->styles_borrowed) {
         lv_ll_remove(&component_scope_ll, scope);
         component_scope_free(scope);
         return;
@@ -548,9 +555,18 @@ static void component_scope_retire(lv_xml_component_scope_t * scope)
 
     scope->pending_free = 1;
     lv_ll_chg_list(&component_scope_ll, &pending_free_scope_ll, scope, true);
-    LV_LOG_INFO("Component '%s' replaced/unregistered with %" LV_PRIu32 " live instance(s); "
-                "its scope is held until the last one is deleted",
-                scope->name ? scope->name : "?", scope->instance_cnt);
+    if(scope->instance_cnt != 0) {
+        LV_LOG_INFO("Component '%s' replaced/unregistered with %" LV_PRIu32 " live instance(s); "
+                    "its scope is held until the last one is deleted",
+                    scope->name ? scope->name : "?", scope->instance_cnt);
+    }
+    else {
+        /* Nothing will ever decrement this one - see `styles_borrowed`. It is
+         * held until lv_xml_component_deinit() force-drains the pending list. */
+        LV_LOG_INFO("Component '%s' replaced/unregistered after lending a style to another "
+                    "scope; its style storage is held until deinit",
+                    scope->name ? scope->name : "?");
+    }
 }
 
 /** LV_EVENT_DELETE on an instance's view root: drop this instance's claim on the

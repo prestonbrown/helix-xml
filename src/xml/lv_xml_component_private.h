@@ -71,6 +71,21 @@ struct _lv_xml_component_scope_t {
      *  a fresh scope, so a corrected (or still-wrong) definition is reported
      *  again on the next load. */
     uint32_t name_clash_warned : 1;
+    /** Set once another scope has resolved one of our styles through the
+     *  `component.style` form, which hands that scope's widgets a raw
+     *  lv_style_t* into OUR style_ll. `instance_cnt` cannot see those widgets -
+     *  they are instances of the borrower, not of us - so without this flag a
+     *  styles-only library (a <styles> block nothing ever instantiates, whose
+     *  count is therefore permanently zero) took the eager-free path in
+     *  component_scope_retire() and pulled the storage out from under every
+     *  widget that had borrowed one. See that function.
+     *
+     *  Deliberately one-way: it records that a style LEFT this scope, not how
+     *  many are live, so a borrowed-from scope is held until
+     *  lv_xml_component_deinit(). The precise version would claim the lender
+     *  per instantiating view root; this is the conservative form, and it costs
+     *  one held scope per re-registration of a file that lends styles. */
+    uint32_t styles_borrowed : 1;
     struct _lv_xml_component_scope_t * next;
 };
 

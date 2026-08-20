@@ -970,6 +970,123 @@ static void test_re_registering_with_no_live_instance_frees_the_old_scope_at_onc
         "deferred when it should have been freed on the spot");
 }
 
+/*---------------------------------------------------------------------------
+ * A STYLE BORROWED ACROSS SCOPES
+ *
+ * `<style name="other_component.thing"/>` resolves through another scope and
+ * hands the widget a raw lv_style_t* into THAT scope's style_ll. The instance
+ * counter cannot see it: the widget is an instance of the BORROWER, so it bumps
+ * the borrower's count, and the lender's count stays where it was.
+ *
+ * For a shared-style library - a component that exists only to hold a <styles>
+ * block, which nothing ever instantiates - the lender's count is permanently
+ * zero, so re-registering it took component_scope_retire()'s eager-free path and
+ * pulled the style storage out from under every widget that had borrowed one.
+ * The detonation is nowhere near the cause: the next full style sweep
+ * (lv_obj_report_style_change(NULL), which a theme init does) walks every widget
+ * on every screen and reads the freed node.
+ *--------------------------------------------------------------------------*/
+
+/* The lender. Deliberately FATTER than v2 so the heap moves unambiguously when
+ * it is freed, exactly as DEFER_V1_XML/DEFER_V2_XML do above. */
+static const char * STYLE_LIB_V1_XML =
+    "<component>"
+    "  <consts>"
+    "    <string name=\"lib_cap\" value=\"library version one\"/>"
+    "    <string name=\"lib_pad\" value=\"library padding note\"/>"
+    "  </consts>"
+    "  <styles>"
+    "    <style name=\"shared_box\" pad_all=\"23\" radius=\"41\" border_width=\"7\"/>"
+    "    <style name=\"unused_box\" pad_all=\"19\" radius=\"13\"/>"
+    "  </styles>"
+    "  <view extends=\"lv_obj\"/>"
+    "</component>";
+
+/* Same name, leaner definition, and a DIFFERENT pad so a widget that silently
+ * re-resolved to v2 is distinguishable from one still reading v1. */
+static const char * STYLE_LIB_V2_XML =
+    "<component>"
+    "  <styles><style name=\"shared_box\" pad_all=\"29\"/></styles>"
+    "  <view extends=\"lv_obj\"/>"
+    "</component>";
+
+/* The borrower: its own scope owns no styles at all. */
+static const char * STYLE_BORROWER_XML =
+    "<component>"
+    "  <view extends=\"lv_obj\" name=\"borrower_root\">"
+    "    <lv_obj name=\"borrowed_box\"><style name=\"style_lib.shared_box\"/></lv_obj>"
+    "  </view>"
+    "</component>";
+
+static void assert_borrowed_box_pad(lv_obj_t * inst, int32_t expected, const char * why)
+{
+    lv_obj_t * box = ASSERT_NAMED(inst, "borrowed_box");
+    TEST_ASSERT_EQUAL_INT32_MESSAGE(expected, lv_obj_get_style_pad_top(box, LV_PART_MAIN), why);
+}
+
+/**
+ * Re-register a styles-only library while a widget from ANOTHER component is
+ * still holding one of its styles. The library has no instances of its own and
+ * never will, so nothing in the instance counter protects it - the lender has to
+ * notice that it lent a style out.
+ *
+ * Same evidence shape as the same-scope deferral test above: the heap assertion
+ * is what makes the failure reliable (a freed lv_style_t reads back fine until
+ * the block is reused), the value assertions are what make it meaningful, and
+ * ASAN is what makes it unambiguous.
+ */
+static void test_re_registering_a_lender_holds_it_while_a_borrowed_style_is_live(void)
+{
+    ASSERT_XML_REGISTERS("style_lib", STYLE_LIB_V1_XML);
+    ASSERT_XML_REGISTERS("style_borrower", STYLE_BORROWER_XML);
+
+    lv_obj_t * inst = XML_CREATE(helix_test_env_screen(), "style_borrower", NULL);
+    helix_test_pump(30);
+    assert_borrowed_box_pad(inst, 23, "the lender's style never reached the borrowing widget");
+
+    const size_t before = heap_free_size();
+    ASSERT_XML_REGISTERS("style_lib", STYLE_LIB_V2_XML);   /* the hot-reload save */
+    const size_t after = heap_free_size();
+
+    ASSERT_HEAP(
+        after < before,
+        "free_size ROSE across a re-registration of a styles-only library - its scope was "
+        "freed while a widget in another component still held a raw lv_style_t pointer into it");
+
+    assert_borrowed_box_pad(inst, 23,
+                            "the borrowed style no longer reads back its own value - the "
+                            "lender's scope was freed underneath the widget");
+
+    /* The field detonator, verbatim: theme_manager_init() ends in a full sweep,
+     * and report_style_change_core() walks EVERY object on every screen reading
+     * each style it holds. This is the call that turned the dangling pointer
+     * into a SIGSEGV in HelixScreen's suite. */
+    lv_obj_report_style_change(NULL);
+    helix_test_pump(5);
+    assert_borrowed_box_pad(inst, 23, "a full style sweep after the re-registration lost the "
+                                      "borrowed value");
+}
+
+/**
+ * The other half, and the reason the lender's protection has to be conditional:
+ * a styles-only library nobody ever borrowed from is still freed on the spot.
+ * Without this, "hold anything that owns styles" would look like a fix and would
+ * quietly turn every hot-reload save into a permanent leak.
+ */
+static void test_re_registering_an_unborrowed_lender_still_frees_it_at_once(void)
+{
+    ASSERT_XML_REGISTERS("style_lib", STYLE_LIB_V1_XML);
+
+    const size_t before = heap_free_size();
+    ASSERT_XML_REGISTERS("style_lib", STYLE_LIB_V2_XML);
+    const size_t after = heap_free_size();
+
+    ASSERT_HEAP(
+        after > before,
+        "free_size FELL across a re-registration of a library nothing had borrowed from - it "
+        "was deferred when it should have been freed on the spot");
+}
+
 /** A deferred scope is out of the registry the moment it is replaced: a lookup
  *  must find the new definition, and foreach must see the name exactly once. */
 static void test_a_lookup_after_a_deferred_replacement_finds_the_new_definition(void)
@@ -1427,6 +1544,8 @@ int main(void)
 
     RUN_TEST(test_re_registering_with_a_live_instance_holds_the_old_scope);
     RUN_TEST(test_re_registering_with_no_live_instance_frees_the_old_scope_at_once);
+    RUN_TEST(test_re_registering_a_lender_holds_it_while_a_borrowed_style_is_live);
+    RUN_TEST(test_re_registering_an_unborrowed_lender_still_frees_it_at_once);
     RUN_TEST(test_a_lookup_after_a_deferred_replacement_finds_the_new_definition);
     RUN_TEST(test_deleting_the_last_instance_releases_the_deferred_scope);
     RUN_TEST(test_a_deferred_scope_outlives_all_but_the_last_instance);

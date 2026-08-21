@@ -233,6 +233,6 @@ directory.
 
 Further reading, in the HelixScreen repository:
 
-- [LVGL_XML_SITUATION.md](https://github.com/prestonbrown/helixscreen/blob/main/docs/devel/LVGL_XML_SITUATION.md) — licensing and upstream analysis
+- [HELIX_XML_FORK.md](https://github.com/prestonbrown/helixscreen/blob/main/docs/devel/HELIX_XML_FORK.md) — licensing and upstream analysis
 - [LVGL9_XML_GUIDE.md](https://github.com/prestonbrown/helixscreen/blob/main/docs/devel/LVGL9_XML_GUIDE.md) — syntax guide
 - [LVGL9_XML_ATTRIBUTES_REFERENCE.md](https://github.com/prestonbrown/helixscreen/blob/main/docs/devel/LVGL9_XML_ATTRIBUTES_REFERENCE.md) — attribute reference

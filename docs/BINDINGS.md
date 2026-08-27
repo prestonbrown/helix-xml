@@ -124,6 +124,11 @@ Operands are subject names and integer literals. Operators, loosest first:
 
 Parentheses group. A bare subject name is truthy when non-zero.
 
+Symbolic and word forms tokenize identically — `a && b` and `a and b` compile to
+the same expression. `/` and `%` by zero **evaluate to `0` rather than
+crashing**, with a warning on LVGL's log; an expression that silently reads as
+`0` is usually a divide-by-zero worth finding.
+
 **Prefer the word forms in XML.** `<`, `>` and `&&` need escaping as `&lt;`,
 `&gt;` and `&amp;&amp;`, which is legal but unreadable:
 

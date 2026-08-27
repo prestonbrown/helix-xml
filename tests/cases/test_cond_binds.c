@@ -45,6 +45,7 @@
 #include "helpers/helix_test_pump.h"
 #include "helpers/xml_assert.h"
 
+
 /*---------------------------------------------------------------------------
  * Unity fixture
  *--------------------------------------------------------------------------*/
@@ -355,6 +356,107 @@ static void test_bind_style_if_with_invert_enables_the_style_when_the_condition_
  * main
  *--------------------------------------------------------------------------*/
 
+static const char * TWO_WAY_XML =
+    "<component>"
+    "  <subjects>"
+    "    <subject name=\"can\" type=\"int\" value=\"1\"/>"
+    "  </subjects>"
+    "  <view extends=\"lv_obj\" name=\"two_way_root\">"
+    "    <lv_obj name=\"box\" hidden=\"true\">"
+    "      <bind_flag_if_eq subject=\"can\" flag=\"hidden\" ref_value=\"0\"/>"
+    "    </lv_obj>"
+    "  </view>"
+    "</component>";
+
+/**
+ * The flag binds are TWO-WAY, and that is the half people do not expect.
+ *
+ * Read as English, `subject="can" flag="hidden" ref_value="0"` sounds like
+ * "hide when can is 0" - a one-way rule that abstains otherwise. It is not: a
+ * non-match REMOVES the flag. Here the markup even asks for `hidden="true"` up
+ * front and the binding takes it straight back off, because `can` is 1.
+ *
+ * Worth its own test because every existing case in this file drives the
+ * subject through both states and so cannot tell "removes on non-match" from
+ * "never added in the first place". This one starts from a flag that is
+ * already set by something else.
+ */
+static void test_a_non_matching_flag_bind_removes_the_flag_rather_than_abstaining(void)
+{
+    ASSERT_XML_REGISTERS("cb_two_way", TWO_WAY_XML);
+
+    lv_obj_t * root = XML_CREATE(helix_test_env_screen(), "cb_two_way", NULL);
+    helix_test_pump(30);
+    lv_obj_t * box = ASSERT_NAMED(root, "box");
+
+    /* hidden="true" in the markup, `can` is 1, so ref_value does NOT match -
+     * and the bind actively clears the flag the attribute asked for. */
+    ASSERT_NO_FLAG(box, LV_OBJ_FLAG_HIDDEN);
+
+    lv_subject_t * can = scope_subject("cb_two_way", "can");
+
+    set_and_settle(can, 0);
+    ASSERT_FLAG(box, LV_OBJ_FLAG_HIDDEN);
+
+    set_and_settle(can, 1);
+    ASSERT_NO_FLAG(box, LV_OBJ_FLAG_HIDDEN);
+}
+
+static const char * TWO_BINDS_XML =
+    "<component>"
+    "  <subjects>"
+    "    <subject name=\"can\" type=\"int\" value=\"1\"/>"
+    "    <subject name=\"dirty\" type=\"int\" value=\"0\"/>"
+    "  </subjects>"
+    "  <view extends=\"lv_obj\" name=\"two_binds_root\">"
+    "    <lv_obj name=\"box\">"
+    "      <bind_flag_if cond=\"dirty\" flag=\"hidden\" invert=\"true\"/>"
+    "      <bind_flag_if_eq subject=\"can\" flag=\"hidden\" ref_value=\"0\"/>"
+    "    </lv_obj>"
+    "  </view>"
+    "</component>";
+
+/**
+ * Two binds for ONE flag on ONE widget do not AND - each asserts both outcomes,
+ * so they overwrite each other and the last to run wins.
+ *
+ * The markup below reads as "show when dirty, and never when can is 0", which
+ * is what someone writing it means. What it does is show the widget with
+ * `dirty` at 0, because the second bind sees can != 0 and clears the flag the
+ * first one just set.
+ *
+ * Pinned rather than fixed: each binding is individually correct and
+ * independent, and making them compose would mean flag ownership shared across
+ * bindings. The fix at the call site is one expression - `cond="can and dirty"`
+ * - and the engine's job is to make this behaviour predictable, not silent.
+ */
+static void test_two_flag_binds_for_one_flag_do_not_and_together(void)
+{
+    ASSERT_XML_REGISTERS("cb_two_binds", TWO_BINDS_XML);
+
+    lv_obj_t * root = XML_CREATE(helix_test_env_screen(), "cb_two_binds", NULL);
+    helix_test_pump(30);
+    lv_obj_t * box = ASSERT_NAMED(root, "box");
+
+    /* dirty=0 => the inverted cond bind wants HIDDEN. can=1 => the eq bind
+     * wants it shown. If these ANDed, hidden would stand. It does not. */
+    ASSERT_NO_FLAG(box, LV_OBJ_FLAG_HIDDEN);
+
+    lv_subject_t * can = scope_subject("cb_two_binds", "can");
+    lv_subject_t * dirty = scope_subject("cb_two_binds", "dirty");
+
+    /* Drive the eq bind to its matching value and it applies the flag, whatever
+     * the cond bind wants - dirty=1 alone would mean "show". */
+    set_and_settle(dirty, 1);
+    set_and_settle(can, 0);
+    ASSERT_FLAG(box, LV_OBJ_FLAG_HIDDEN);
+
+    /* And back: the eq bind clears it again even though nothing about `dirty`
+     * changed. Whichever bind ran last owns the flag. */
+    set_and_settle(can, 1);
+    ASSERT_NO_FLAG(box, LV_OBJ_FLAG_HIDDEN);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -367,6 +469,9 @@ int main(void)
 
     RUN_TEST(test_bind_style_if_enables_the_style_when_the_condition_is_true);
     RUN_TEST(test_bind_style_if_with_invert_enables_the_style_when_the_condition_is_false);
+
+    RUN_TEST(test_a_non_matching_flag_bind_removes_the_flag_rather_than_abstaining);
+    RUN_TEST(test_two_flag_binds_for_one_flag_do_not_and_together);
 
     return UNITY_END();
 }

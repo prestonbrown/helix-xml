@@ -64,6 +64,11 @@ Features added here that upstream's engine does not have:
 | `float` and `color` subjects | Upstream supports only `int` and `string` |
 | `<subject name= type= value=>` | Single-tag subject declarations (upstream's tag-per-type form also parses) |
 
+Full reference for the reactive surface — subjects, every binding element, the
+expression language, `<if>`/`<repeat>`, and the two rules below in context — is
+in **[docs/BINDINGS.md](docs/BINDINGS.md)**. The two that bite hardest are
+repeated here because they fail silently.
+
 ### `cond=` vs `<subject_expr>`: when each is resolved
 
 Both take the same expression language, and choosing between them is a

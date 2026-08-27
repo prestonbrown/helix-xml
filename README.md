@@ -64,6 +64,51 @@ Features added here that upstream's engine does not have:
 | `float` and `color` subjects | Upstream supports only `int` and `string` |
 | `<subject name= type= value=>` | Single-tag subject declarations (upstream's tag-per-type form also parses) |
 
+### `cond=` vs `<subject_expr>`: when each is resolved
+
+Both take the same expression language, and choosing between them is a
+*lifecycle* question, not a style one. The wrong choice fails silently.
+
+| Construct | Resolved | Sees |
+|---|---|---|
+| `<subject_expr name="X" expr="…"/>` | when the **component is registered** (`lv_xml_component_register_*`) | only subjects that already exist at registration time |
+| `cond="…"` on `bind_flag_if` / `bind_state_if` / `bind_style_if` | when the **view is created** (`lv_xml_create`) | everything above, plus anything registered between registration and creation |
+
+`<subject_expr>` resolves its operands once, at registration. A subject the
+host application creates later — typically in some per-screen init that runs
+after all components are registered — does not exist yet, so the expression
+does not compile and the derived subject is **never registered**. Nothing
+downstream errors; bindings referencing it simply never fire.
+
+`cond=` compiles at view-creation instead, so it sees subjects registered any
+time before the widget is built. When an operand's registration time is not
+under your control, prefer `cond=` and accept repeating the expression at each
+site.
+
+The inverse case is just as real: a view created *before* the host registers a
+subject cannot use `cond=` against it either. There the fix is to register the
+subject earlier, not to change the binding.
+
+### One flag, one binding per widget
+
+`bind_flag_if_eq` (and its siblings) are **two-way**: they add the flag when the
+subject matches `ref_value` and remove it when it does not. Two bindings for the
+same flag on the same widget therefore do not AND together — each one asserts
+both outcomes, and the last to fire wins:
+
+```xml
+<!-- WRONG: when `can_save` != 0 this REMOVES hidden, overriding the line above -->
+<bind_flag_if cond="dirty" flag="hidden" invert="true"/>
+<bind_flag_if_eq subject="can_save" flag="hidden" ref_value="0"/>
+
+<!-- RIGHT: one binding carrying both conditions -->
+<bind_flag_if cond="can_save and dirty" flag="hidden" invert="true"/>
+```
+
+Two bindings for one flag are safe only on *different* widgets — e.g. a wrapper
+and the child inside it — which is why the broken form can look correct in
+markup that happens to be nested that way.
+
 ## Building it into a project
 
 helix-xml is source you compile alongside LVGL — there is no build system here, deliberately.

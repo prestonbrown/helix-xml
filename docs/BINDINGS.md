@@ -47,12 +47,16 @@ All of these are children of the widget they act on.
 
 | Element | Acts on | Comparison form | Expression form |
 |---|---|---|---|
-| `bind_flag_if_eq`, `…_ne`, `…_gt`, `…_ge`, `…_lt`, `…_le` | an `lv_obj` flag | ✅ | — |
+| `bind_flag_if_eq`, `…_not_eq`, `…_gt`, `…_ge`, `…_lt`, `…_le` | an `lv_obj` flag | ✅ | — |
 | `bind_flag_if` | an `lv_obj` flag | — | ✅ `cond=` |
 | `bind_state_if_eq` … | an `lv_state_t` | ✅ | — |
 | `bind_state_if` | an `lv_state_t` | — | ✅ `cond=` |
 | `bind_style_if_eq` … | a named style | ✅ | — |
 | `bind_style_if` | a named style | — | ✅ `cond=` |
+
+The not-equal suffix is spelled **`_not_eq`**, not `_ne` — `_ne` is the *expression*
+operator (`a ne b`), and the two are not interchangeable. An element named
+`bind_flag_if_ne` does not exist and is silently not recognised.
 
 `invert="true"` on the expression forms flips the mapping — apply when the
 condition is **false**. That is the shape most `flag="hidden"` bindings want,

@@ -30,6 +30,7 @@
 /**********************
  *  STATIC PROTOTYPES
  **********************/
+static void dropdown_selected_observer_cb(lv_observer_t * observer, lv_subject_t * subject);
 #if LV_USE_TRANSLATION
 static void dropdown_translate_options(lv_obj_t * dd, const char * tags);
 static void dropdown_on_language_changed(lv_event_t * e);
@@ -82,6 +83,19 @@ void lv_xml_dropdown_apply(lv_xml_parser_state_t * state, const char ** attrs)
                 LV_LOG_WARN("Subject \"%s\" doesn't exist in dropdown bind_value", value);
             }
         }
+        /* One-way counterpart to bind_value: the subject drives the selection and
+         * nothing writes back. That leaves the widget's own value_changed handler
+         * as the only writer, so a handler that vetoes a choice and restores the
+         * previous one still reads the previous value rather than the new one. */
+        else if(lv_streq("bind_selected", name)) {
+            lv_subject_t * subject = lv_xml_get_subject(&state->scope, value);
+            if(subject) {
+                lv_subject_add_observer_obj(subject, dropdown_selected_observer_cb, item, NULL);
+            }
+            else {
+                LV_LOG_WARN("Subject \"%s\" doesn't exist in dropdown bind_selected", value);
+            }
+        }
 #if LV_USE_TRANSLATION
         else if(lv_streq("options_tag", name)) {
             if(value[0] == '\0') continue;  /* Skip empty tags */
@@ -115,6 +129,18 @@ void lv_xml_dropdown_list_apply(lv_xml_parser_state_t * state, const char ** att
 /**********************
  *   STATIC FUNCTIONS
  **********************/
+
+static void dropdown_selected_observer_cb(lv_observer_t * observer, lv_subject_t * subject)
+{
+    const int32_t v = lv_subject_get_int(subject);
+
+    /* A negative value means "no selection" to callers that use -1 as unset.
+     * Widening it instead would wrap to a huge index, which lv_dropdown_set_selected
+     * clamps to the LAST option - the opposite of leaving the widget alone. */
+    if(v < 0) return;
+
+    lv_dropdown_set_selected((lv_obj_t *)observer->target, (uint32_t)v);
+}
 
 #if LV_USE_TRANSLATION
 /**

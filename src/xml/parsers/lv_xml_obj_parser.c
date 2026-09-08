@@ -16,6 +16,7 @@
 #include <lvgl_private.h>
 #include "../lv_xml_private.h"
 #include "../lv_xml_expr.h"
+#include "../lv_xml_bind_compose.h"
 
 /*********************
  *      DEFINES
@@ -768,6 +769,95 @@ void lv_obj_xml_bind_style_prop_apply(lv_xml_parser_state_t * state, const char 
     lv_obj_bind_style_prop(item, prop, selector, subject);
 }
 
+/* The comparison a `bind_(flag|state)_if_<suffix>` tag asks for. `not_eq`, `lt`
+ * and `le` are the other three inverted, so three operators cover all six. */
+typedef enum {
+    BITFIELD_CMP_EQ,
+    BITFIELD_CMP_GT,
+    BITFIELD_CMP_GE,
+} bitfield_cmp_t;
+
+typedef struct {
+    lv_xml_bind_target_t target;
+    int32_t ref_value;
+    uint8_t cmp;
+    bool inv;
+} bitfield_bind_ctx_t;
+
+/** Decode a suffix into an operator and whether its result is negated. */
+static bool bitfield_cmp_from_suffix(const char * suffix, bitfield_cmp_t * cmp, bool * inv)
+{
+    if(lv_streq(suffix, "eq")) { *cmp = BITFIELD_CMP_EQ; *inv = false; return true; }
+    if(lv_streq(suffix, "not_eq")) { *cmp = BITFIELD_CMP_EQ; *inv = true; return true; }
+    if(lv_streq(suffix, "gt")) { *cmp = BITFIELD_CMP_GT; *inv = false; return true; }
+    if(lv_streq(suffix, "ge")) { *cmp = BITFIELD_CMP_GE; *inv = false; return true; }
+    if(lv_streq(suffix, "lt")) { *cmp = BITFIELD_CMP_GE; *inv = true; return true; }  /*a < b == !(a >= b)*/
+    if(lv_streq(suffix, "le")) { *cmp = BITFIELD_CMP_GT; *inv = true; return true; }  /*a <= b == !(a > b)*/
+    return false;
+}
+
+static void bitfield_bind_observer_cb(lv_observer_t * observer, lv_subject_t * subject)
+{
+    bitfield_bind_ctx_t * c = (bitfield_bind_ctx_t *)lv_observer_get_user_data(observer);
+    int32_t v = lv_subject_get_int(subject);
+
+    bool res = false;
+    switch(c->cmp) {
+        case BITFIELD_CMP_EQ:
+            res = v == c->ref_value;
+            break;
+        case BITFIELD_CMP_GT:
+            res = v > c->ref_value;
+            break;
+        case BITFIELD_CMP_GE:
+            res = v >= c->ref_value;
+            break;
+    }
+    if(c->inv) res = !res;
+
+    lv_xml_bind_target_set(&c->target, res);
+}
+
+static void free_bitfield_bind_ctx_cb(lv_event_t * e)
+{
+    lv_free(lv_event_get_user_data(e));
+}
+
+/**
+ * Install a `subject <cmp> ref_value` binding over `bits` of `obj`'s state or
+ * flag bitfield, composing with every other binding on the same bits.
+ *
+ * LVGL's own lv_obj_bind_state_if_* / lv_obj_bind_flag_if_* write those bits
+ * directly, so a widget carrying two of them wears whichever subject notified
+ * last and one reason to be disabled can cancel another. Routing the same
+ * comparison through lv_xml_bind_compose makes the applied result the OR of
+ * every binding on the bits, in any notify order.
+ */
+static void bind_bitfield_cmp(lv_obj_t * obj, lv_subject_t * subject, lv_xml_bind_kind_t kind,
+                              uint32_t bits, int32_t ref_value, bitfield_cmp_t cmp, bool inv)
+{
+    if(subject->type != LV_SUBJECT_TYPE_INT) {
+        LV_LOG_WARN("Incompatible subject type: %d", subject->type);
+        return;
+    }
+
+    bitfield_bind_ctx_t * c = lv_malloc_zeroed(sizeof(bitfield_bind_ctx_t));
+    LV_ASSERT_MALLOC(c);
+    if(c == NULL) return;
+
+    c->ref_value = ref_value;
+    c->cmp = (uint8_t)cmp;
+    c->inv = inv;
+
+    /* Claim the share BEFORE the free hook so the group's own delete hook, which
+     * owns the share, runs first and cannot read a freed context. */
+    lv_xml_bind_target_init(&c->target, obj, kind, bits);
+    lv_obj_add_event_cb(obj, free_bitfield_bind_ctx_cb, LV_EVENT_DELETE, c);
+
+    /* Fires once here, so the widget is correct before the first notify. */
+    lv_subject_add_observer_obj(subject, bitfield_bind_observer_cb, obj, c);
+}
+
 void * lv_obj_xml_bind_flag_create(lv_xml_parser_state_t * state, const char ** attrs)
 {
     LV_UNUSED(attrs);
@@ -782,14 +872,11 @@ void lv_obj_xml_bind_flag_apply(lv_xml_parser_state_t * state, const char ** att
     /*If starts with "lv_obj-" skip that part*/
     if(op[0] == 'l') op += 7;
 
-    lv_observer_t * (*cb)(lv_obj_t * obj, lv_subject_t * subject, lv_obj_flag_t flag, int32_t ref_value) = NULL;
-    if(lv_streq(op, "bind_flag_if_eq")) cb = lv_obj_bind_flag_if_eq;
-    else if(lv_streq(op, "bind_flag_if_not_eq")) cb = lv_obj_bind_flag_if_not_eq;
-    else if(lv_streq(op, "bind_flag_if_gt")) cb = lv_obj_bind_flag_if_gt;
-    else if(lv_streq(op, "bind_flag_if_ge")) cb = lv_obj_bind_flag_if_ge;
-    else if(lv_streq(op, "bind_flag_if_lt")) cb = lv_obj_bind_flag_if_lt;
-    else if(lv_streq(op, "bind_flag_if_le")) cb = lv_obj_bind_flag_if_le;
-    else {
+    static const size_t prefix_len = sizeof("bind_flag_if_") - 1;
+    bitfield_cmp_t cmp;
+    bool inv;
+    if(lv_strncmp(op, "bind_flag_if_", prefix_len) != 0
+       || !bitfield_cmp_from_suffix(op + prefix_len, &cmp, &inv)) {
         LV_LOG_WARN("`%s` is not known", op);
         return;
     }
@@ -820,8 +907,8 @@ void lv_obj_xml_bind_flag_apply(lv_xml_parser_state_t * state, const char ** att
         else {
             lv_obj_flag_t flag = flag_to_enum(flag_str);
             int32_t ref_value = lv_xml_atoi(ref_value_str);
-            void * item = lv_xml_state_get_item(state);
-            cb(item, subject, flag, ref_value);
+            lv_obj_t * item = lv_xml_state_get_item(state);
+            bind_bitfield_cmp(item, subject, LV_XML_BIND_FLAG, flag, ref_value, cmp, inv);
         }
     }
 }
@@ -835,8 +922,7 @@ static lv_subject_t * cond_flag_scope_resolver(void * ctx, const char * name)
 }
 
 typedef struct {
-    lv_obj_t * obj;
-    lv_obj_flag_t flag;
+    lv_xml_bind_target_t target;
     bool invert;
 } cond_flag_ctx_t;
 
@@ -847,8 +933,7 @@ static void cond_flag_cb(void * user_data, int32_t value)
     cond_flag_ctx_t * c = (cond_flag_ctx_t *)user_data;
     bool on = value != 0;
     if(c->invert) on = !on;
-    if(on) lv_obj_add_flag(c->obj, c->flag);
-    else lv_obj_remove_flag(c->obj, c->flag);
+    lv_xml_bind_target_set(&c->target, on);
 }
 
 /* `lv_xml_expr_bind` owns and frees the compiled expression on `owner`
@@ -903,13 +988,15 @@ void lv_obj_xml_bind_flag_if_apply(lv_xml_parser_state_t * state, const char ** 
         lv_xml_expr_free(expr);
         return;
     }
-    c->obj = item;
-    c->flag = flag;
     const char * invert_str = lv_xml_get_value_of(attrs, "invert");
     c->invert = invert_str && (lv_streq(invert_str, "true") || lv_streq(invert_str, "1"));
 
-    lv_xml_expr_bind(expr, item, cond_flag_cb, c);
+    /* Claim the share BEFORE the free hook so the group's own delete hook, which
+     * owns the share, runs first and cannot read a freed context. */
+    lv_xml_bind_target_init(&c->target, item, LV_XML_BIND_FLAG, flag);
     lv_obj_add_event_cb(item, free_cond_flag_ctx_cb, LV_EVENT_DELETE, c);
+
+    lv_xml_expr_bind(expr, item, cond_flag_cb, c);
 }
 
 void * lv_obj_xml_bind_state_create(lv_xml_parser_state_t * state, const char ** attrs)
@@ -926,14 +1013,11 @@ void lv_obj_xml_bind_state_apply(lv_xml_parser_state_t * state, const char ** at
     /*If starts with "lv_obj-" skip that part*/
     if(op[0] == 'l') op += 7;
 
-    lv_observer_t * (*cb)(lv_obj_t * obj, lv_subject_t * subject, lv_state_t flag, int32_t ref_value) = NULL;
-    if(lv_streq(op, "bind_state_if_eq")) cb = lv_obj_bind_state_if_eq;
-    else if(lv_streq(op, "bind_state_if_not_eq")) cb = lv_obj_bind_state_if_not_eq;
-    else if(lv_streq(op, "bind_state_if_gt")) cb = lv_obj_bind_state_if_gt;
-    else if(lv_streq(op, "bind_state_if_ge")) cb = lv_obj_bind_state_if_ge;
-    else if(lv_streq(op, "bind_state_if_lt")) cb = lv_obj_bind_state_if_lt;
-    else if(lv_streq(op, "bind_state_if_le")) cb = lv_obj_bind_state_if_le;
-    else {
+    static const size_t prefix_len = sizeof("bind_state_if_") - 1;
+    bitfield_cmp_t cmp;
+    bool inv;
+    if(lv_strncmp(op, "bind_state_if_", prefix_len) != 0
+       || !bitfield_cmp_from_suffix(op + prefix_len, &cmp, &inv)) {
         LV_LOG_WARN("`%s` is not known", op);
         return;
     }
@@ -964,15 +1048,14 @@ void lv_obj_xml_bind_state_apply(lv_xml_parser_state_t * state, const char ** at
         else {
             lv_state_t s = lv_xml_state_to_enum(state_str);
             int32_t ref_value = lv_xml_atoi(ref_value_str);
-            void * item = lv_xml_state_get_item(state);
-            cb(item, subject, s, ref_value);
+            lv_obj_t * item = lv_xml_state_get_item(state);
+            bind_bitfield_cmp(item, subject, LV_XML_BIND_STATE, s, ref_value, cmp, inv);
         }
     }
 }
 
 typedef struct {
-    lv_obj_t * obj;
-    lv_state_t state;
+    lv_xml_bind_target_t target;
     bool invert;
 } cond_state_ctx_t;
 
@@ -983,8 +1066,7 @@ static void cond_state_cb(void * user_data, int32_t value)
     cond_state_ctx_t * c = (cond_state_ctx_t *)user_data;
     bool on = value != 0;
     if(c->invert) on = !on;
-    if(on) lv_obj_add_state(c->obj, c->state);
-    else lv_obj_remove_state(c->obj, c->state);
+    lv_xml_bind_target_set(&c->target, on);
 }
 
 /* `lv_xml_expr_bind` owns and frees the compiled expression on `owner`
@@ -1037,13 +1119,15 @@ void lv_obj_xml_bind_state_if_apply(lv_xml_parser_state_t * state, const char **
         lv_xml_expr_free(expr);
         return;
     }
-    c->obj = item;
-    c->state = st;
     const char * invert_str = lv_xml_get_value_of(attrs, "invert");
     c->invert = invert_str && (lv_streq(invert_str, "true") || lv_streq(invert_str, "1"));
 
-    lv_xml_expr_bind(expr, item, cond_state_cb, c);
+    /* Claim the share BEFORE the free hook so the group's own delete hook, which
+     * owns the share, runs first and cannot read a freed context. */
+    lv_xml_bind_target_init(&c->target, item, LV_XML_BIND_STATE, st);
     lv_obj_add_event_cb(item, free_cond_state_ctx_cb, LV_EVENT_DELETE, c);
+
+    lv_xml_expr_bind(expr, item, cond_state_cb, c);
 }
 
 typedef struct {

@@ -82,30 +82,38 @@ This is the rule that surprises people, so it is stated plainly:
 It is not a one-way rule: when `can` is anything else the binding actively
 **removes** `hidden` — including a `hidden="true"` the markup itself asked for.
 
-Two consequences:
+Pinned by `test_a_non_matching_flag_bind_removes_the_flag_rather_than_abstaining`
+in `test_cond_binds.c`.
 
-**Do not put two bindings for the same flag on one widget.** They do not AND.
-Each asserts both outcomes, so they overwrite each other and whichever runs last
-owns the flag:
+### Several bindings on one property OR together
+
+A widget may carry more than one reason to be disabled, or hidden. Put each
+reason in its own binding: they compose, and the property is applied while **any**
+of them holds.
 
 ```xml
-<!-- WRONG. Reads as "show when dirty, never when can is 0".
-     Does the opposite: with can != 0 the second bind clears the flag the
-     first one just set, so the widget shows even when dirty is 0. -->
-<bind_flag_if cond="dirty" flag="hidden" invert="true"/>
-<bind_flag_if_eq subject="can" flag="hidden" ref_value="0"/>
+<!-- Disabled while a job holds the machine, or while a controls operation is
+     already running, and enabled only when neither holds. -->
+<bind_state_if_eq subject="job_holds_machine" state="disabled" ref_value="1"/>
+<bind_state_if_eq subject="controls_operation_in_progress" state="disabled" ref_value="1"/>
+```
 
-<!-- RIGHT. One binding, both conditions. -->
+The two families mix freely - an expression binding and a comparison binding on
+one property compose the same way - and the result does not depend on which
+subject notified last. Composition is per widget and per property: bindings on
+different states, on a state versus a flag, or on two widgets, never see each
+other.
+
+What OR does **not** give you is the conjunction. Two bindings never AND; a
+condition that needs one is one expression:
+
+```xml
+<!-- "Hide unless BOTH can and dirty" - as two bindings this would hide when
+     EITHER wanted to. -->
 <bind_flag_if cond="can and dirty" flag="hidden" invert="true"/>
 ```
 
-Two bindings for one flag are safe only on **different** widgets — a wrapper and
-the child inside it — which is why the broken form can look correct in markup
-that happens to be nested that way.
-
-Both behaviours are pinned:
-`test_a_non_matching_flag_bind_removes_the_flag_rather_than_abstaining` and
-`test_two_flag_binds_for_one_flag_do_not_and_together` in `test_cond_binds.c`.
+Pinned by `test_bind_compose.c`, which drives every pair in both notify orders.
 
 ## The expression language
 
@@ -253,7 +261,7 @@ mistakes surface as *nothing happening*:
 |---|---|
 | A `<subject_expr>` subject does not exist | an operand was not registered when the component was registered — see the trap above |
 | A binding never fires | it references a subject name that does not resolve in this scope |
-| A widget is visible when it should not be | two bindings for one flag on one widget |
+| A widget is visible when it should not be | a binding on the same flag of an ancestor, which composition does not reach |
 | `cond=` does not compile | an operand name is unknown at view-creation time |
 
 Warnings are emitted through LVGL's log; raise its level when a binding appears

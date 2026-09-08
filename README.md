@@ -94,25 +94,29 @@ The inverse case is just as real: a view created *before* the host registers a
 subject cannot use `cond=` against it either. There the fix is to register the
 subject earlier, not to change the binding.
 
-### One flag, one binding per widget
+### Several bindings on one property OR together
 
 `bind_flag_if_eq` (and its siblings) are **two-way**: they add the flag when the
-subject matches `ref_value` and remove it when it does not. Two bindings for the
-same flag on the same widget therefore do not AND together — each one asserts
-both outcomes, and the last to fire wins:
+subject matches `ref_value` and remove it when it does not. Several bindings on
+one flag or state of one widget compose rather than fight: the property is
+applied while **any** of them holds, whatever order their subjects notify in, so
+each independent reason gets its own line.
 
 ```xml
-<!-- WRONG: when `can_save` != 0 this REMOVES hidden, overriding the line above -->
-<bind_flag_if cond="dirty" flag="hidden" invert="true"/>
-<bind_flag_if_eq subject="can_save" flag="hidden" ref_value="0"/>
-
-<!-- RIGHT: one binding carrying both conditions -->
-<bind_flag_if cond="can_save and dirty" flag="hidden" invert="true"/>
+<!-- Disabled while a job holds the machine, or while an operation is already
+     running, and enabled only when neither holds. -->
+<bind_state_if_eq subject="job_holds_machine" state="disabled" ref_value="1"/>
+<bind_state_if_eq subject="operation_in_progress" state="disabled" ref_value="1"/>
 ```
 
-Two bindings for one flag are safe only on *different* widgets — e.g. a wrapper
-and the child inside it — which is why the broken form can look correct in
-markup that happens to be nested that way.
+What that does not give you is the conjunction. Two bindings never AND, so a
+condition that needs one is a single expression:
+
+```xml
+<!-- "Hide unless BOTH can_save and dirty" - as two bindings this would hide
+     when either wanted to. -->
+<bind_flag_if cond="can_save and dirty" flag="hidden" invert="true"/>
+```
 
 ## Building it into a project
 

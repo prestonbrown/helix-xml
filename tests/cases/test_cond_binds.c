@@ -417,20 +417,19 @@ static const char * TWO_BINDS_XML =
     "</component>";
 
 /**
- * Two binds for ONE flag on ONE widget do not AND - each asserts both outcomes,
- * so they overwrite each other and the last to run wins.
+ * Two binds for ONE flag on ONE widget do not AND - they OR. Each binding is an
+ * independent reason to apply the flag, so it is set while either holds and
+ * cleared only once neither does.
  *
- * The markup below reads as "show when dirty, and never when can is 0", which
- * is what someone writing it means. What it does is show the widget with
- * `dirty` at 0, because the second bind sees can != 0 and clears the flag the
- * first one just set.
+ * The markup below reads as "show when dirty, and never when can is 0". Under
+ * OR that is "hide unless dirty, and also hide when can is 0", which is the
+ * flag's natural composition: any reason to hide hides. A caller wanting the
+ * conjunction spells it as one expression - `cond="can and dirty"`.
  *
- * Pinned rather than fixed: each binding is individually correct and
- * independent, and making them compose would mean flag ownership shared across
- * bindings. The fix at the call site is one expression - `cond="can and dirty"`
- * - and the engine's job is to make this behaviour predictable, not silent.
+ * The order independence this rests on is test_bind_compose.c's subject; what
+ * matters here is that neither of the two families silently drops out.
  */
-static void test_two_flag_binds_for_one_flag_do_not_and_together(void)
+static void test_two_flag_binds_for_one_flag_or_together(void)
 {
     ASSERT_XML_REGISTERS("cb_two_binds", TWO_BINDS_XML);
 
@@ -438,21 +437,21 @@ static void test_two_flag_binds_for_one_flag_do_not_and_together(void)
     helix_test_pump(30);
     lv_obj_t * box = ASSERT_NAMED(root, "box");
 
-    /* dirty=0 => the inverted cond bind wants HIDDEN. can=1 => the eq bind
-     * wants it shown. If these ANDed, hidden would stand. It does not. */
-    ASSERT_NO_FLAG(box, LV_OBJ_FLAG_HIDDEN);
+    /* dirty=0 => the inverted cond bind wants HIDDEN. can=1 => the eq bind does
+     * not. Under OR, hidden stands. */
+    ASSERT_FLAG(box, LV_OBJ_FLAG_HIDDEN);
 
     lv_subject_t * can = scope_subject("cb_two_binds", "can");
     lv_subject_t * dirty = scope_subject("cb_two_binds", "dirty");
 
-    /* Drive the eq bind to its matching value and it applies the flag, whatever
-     * the cond bind wants - dirty=1 alone would mean "show". */
+    /* The only reason left, released: nothing wants the flag now. */
     set_and_settle(dirty, 1);
+    ASSERT_NO_FLAG(box, LV_OBJ_FLAG_HIDDEN);
+
+    /* The eq bind applies it on its own, and its release lets go again -
+     * neither transition touches what the cond bind wants. */
     set_and_settle(can, 0);
     ASSERT_FLAG(box, LV_OBJ_FLAG_HIDDEN);
-
-    /* And back: the eq bind clears it again even though nothing about `dirty`
-     * changed. Whichever bind ran last owns the flag. */
     set_and_settle(can, 1);
     ASSERT_NO_FLAG(box, LV_OBJ_FLAG_HIDDEN);
 }
@@ -471,7 +470,7 @@ int main(void)
     RUN_TEST(test_bind_style_if_with_invert_enables_the_style_when_the_condition_is_false);
 
     RUN_TEST(test_a_non_matching_flag_bind_removes_the_flag_rather_than_abstaining);
-    RUN_TEST(test_two_flag_binds_for_one_flag_do_not_and_together);
+    RUN_TEST(test_two_flag_binds_for_one_flag_or_together);
 
     return UNITY_END();
 }

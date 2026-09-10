@@ -662,6 +662,7 @@ static void component_scope_free(lv_xml_component_scope_t * scope)
     LV_LL_READ(&scope->style_ll, style) {
         lv_free((char *)style->name);
         lv_free((char *)style->long_name);
+        lv_xml_style_transition_clear(style);
         lv_style_reset(&style->style);
     }
     lv_ll_clear(&scope->style_ll);

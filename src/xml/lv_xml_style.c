@@ -444,6 +444,18 @@ lv_grad_dsc_t * lv_xml_component_get_grad(lv_xml_component_scope_t * scope, cons
     return NULL;
 }
 
+void lv_xml_style_transition_clear(lv_xml_style_t * xs)
+{
+    if(xs == NULL || xs->trans_dsc == NULL) return;
+
+    lv_style_remove_prop(&xs->style, LV_STYLE_TRANSITION);
+    lv_free(xs->trans_dsc);
+    lv_free(xs->trans_props);
+    xs->trans_dsc = NULL;
+    xs->trans_props = NULL;
+    xs->trans_authored_time = 0;
+}
+
 /**********************
  *   STATIC FUNCTIONS
  **********************/

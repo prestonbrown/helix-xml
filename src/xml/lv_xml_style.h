@@ -31,6 +31,13 @@ typedef struct _lv_xml_style_t {
     const char * name;
     const char * long_name;
     lv_style_t style;
+    /* Engine-owned transition. LVGL stores only a pointer in the style, and
+     * lv_style_reset() does not follow it, so the record owns both allocations.
+     * trans_authored_time is the pre-scale duration: scaling reads it rather
+     * than the live value, so repeated scaling does not compound. */
+    lv_style_transition_dsc_t * trans_dsc;
+    lv_style_prop_t * trans_props;
+    uint32_t trans_authored_time;
 } lv_xml_style_t;
 
 /**********************
@@ -67,6 +74,12 @@ lv_xml_style_t * lv_xml_get_style_by_name(lv_xml_component_scope_t * scope, cons
  * @return      a gradient descriptor
  */
 lv_grad_dsc_t * lv_xml_component_get_grad(lv_xml_component_scope_t * scope, const char * name);
+
+/**
+ * Drop the style's transition, freeing the engine-owned descriptor and its
+ * property array. Safe on a style that has none.
+ */
+void lv_xml_style_transition_clear(lv_xml_style_t * xs);
 
 /**********************
  *      MACROS

@@ -1111,6 +1111,39 @@ static void test_re_registering_a_style_replaces_its_transition(void)
     TEST_ASSERT_EQUAL_UINT32(250, d->time);
 }
 
+/*
+ * A `<style>` element re-registering an existing name that does NOT mention any
+ * transition attribute must leave that style's transition untouched: every
+ * other property already follows this extend-not-replace contract (a second
+ * element sets `radius` without repeating `transition_props` on purpose), and
+ * transition is not exempt from it.
+ */
+static void test_re_registering_without_transition_attributes_preserves_the_existing_transition(void)
+{
+    ASSERT_XML_REGISTERS("trans_preserve",
+                         "<component>"
+                         "  <styles>"
+                         "    <style name=\"t\" transition_props=\"opa\" transition_duration=\"140\"/>"
+                         "    <style name=\"t\" radius=\"9\"/>"
+                         "  </styles>"
+                         "  <view extends=\"lv_obj\" name=\"preserve_root\"/>"
+                         "</component>");
+
+    lv_xml_component_scope_t * scope = lv_xml_component_get_scope("trans_preserve");
+    lv_xml_style_t * s = lv_xml_get_style_by_name(scope, "t");
+    TEST_ASSERT_NOT_NULL(s);
+
+    TEST_ASSERT_NOT_NULL_MESSAGE(s->trans_dsc,
+                                 "an unrelated re-registration must not clear an existing transition");
+    const lv_style_transition_dsc_t * d = style_prop_ptr(s, LV_STYLE_TRANSITION);
+    TEST_ASSERT_EQUAL_PTR(s->trans_dsc, d);
+    TEST_ASSERT_EQUAL_UINT32(140, d->time);
+
+    TEST_ASSERT_EQUAL_INT32_MESSAGE(9, style_prop_num(s, LV_STYLE_RADIUS),
+                                    "the second element's own property must still land, "
+                                    "proving the extend path actually ran");
+}
+
 static void test_clearing_a_transition_removes_the_property_and_is_idempotent(void)
 {
     ASSERT_XML_REGISTERS("trans_clear",
@@ -1180,6 +1213,7 @@ int main(void)
     RUN_TEST(test_longhand_transition_builds_a_descriptor_on_the_style);
     RUN_TEST(test_a_non_interpolatable_transition_prop_is_rejected_by_name);
     RUN_TEST(test_re_registering_a_style_replaces_its_transition);
+    RUN_TEST(test_re_registering_without_transition_attributes_preserves_the_existing_transition);
     RUN_TEST(test_clearing_a_transition_removes_the_property_and_is_idempotent);
 
     return UNITY_END();

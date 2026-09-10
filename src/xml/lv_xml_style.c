@@ -520,7 +520,11 @@ static uint32_t transition_time_to_ms(const char * txt)
 
 /**
  * Build the transition descriptor for a style from its longhand attributes
- * and install it, replacing whatever transition the style already owns.
+ * and install it, replacing whatever transition the style already owns. The
+ * new descriptor and its property array are fully built before anything is
+ * torn down, so a style with an existing transition is left with that
+ * transition, untouched, on any failure - never with neither the old
+ * transition nor a new one.
  * @param xs            the style to install onto
  * @param props_str     `|`-separated style property names, or NULL for none
  * @param time          transition duration in ms
@@ -532,8 +536,11 @@ static void style_transition_install(lv_xml_style_t * xs, const char * props_str
                                      uint32_t time, uint32_t delay, lv_anim_path_cb_t path,
                                      const char * style_name)
 {
-    lv_xml_style_transition_clear(xs);
-    if(props_str == NULL) return;
+    if(props_str == NULL) {
+        LV_LOG_WARN("transition attributes given with no `transition_props`, in style `%s`; "
+                    "its transition, if any, is unchanged", style_name);
+        return;
+    }
 
     char buf[256];
     lv_strncpy(buf, props_str, sizeof(buf));
@@ -573,6 +580,9 @@ static void style_transition_install(lv_xml_style_t * xs, const char * props_str
 
     lv_style_transition_dsc_init(dsc, arr, path ? path : lv_anim_path_linear, time, delay, NULL);
 
+    /* The replacement is fully built - only now is it safe to let go of
+     * whatever the style had before. */
+    lv_xml_style_transition_clear(xs);
     xs->trans_dsc = dsc;
     xs->trans_props = arr;
     xs->trans_authored_time = time;

@@ -1144,6 +1144,67 @@ static void test_re_registering_without_transition_attributes_preserves_the_exis
                                     "proving the extend path actually ran");
 }
 
+/*
+ * A re-registration that DOES touch a transition attribute but fails to
+ * install a new transition (no `transition_props`, or a bad one) must leave
+ * the style in whichever state it was already in - never neither the old
+ * transition nor a new one.
+ */
+static void test_re_registering_with_only_duration_leaves_the_original_transition_intact(void)
+{
+    log_capture_start();
+    ASSERT_XML_REGISTERS("trans_reextend_noprops",
+                         "<component>"
+                         "  <styles>"
+                         "    <style name=\"noprops_style\" transition_props=\"opa\""
+                         "           transition_duration=\"140\"/>"
+                         "    <style name=\"noprops_style\" transition_duration=\"250\"/>"
+                         "  </styles>"
+                         "  <view extends=\"lv_obj\" name=\"reextend_noprops_root\"/>"
+                         "</component>");
+    log_capture_stop();
+
+    TEST_ASSERT_TRUE_MESSAGE(log_contains("noprops_style"),
+                             "a transition_duration given with no transition_props must warn, "
+                             "naming the style");
+
+    lv_xml_component_scope_t * scope = lv_xml_component_get_scope("trans_reextend_noprops");
+    lv_xml_style_t * s = lv_xml_get_style_by_name(scope, "noprops_style");
+    TEST_ASSERT_NOT_NULL(s);
+
+    TEST_ASSERT_NOT_NULL_MESSAGE(s->trans_dsc,
+                                 "a failed re-registration must not destroy the original transition");
+    const lv_style_transition_dsc_t * d = style_prop_ptr(s, LV_STYLE_TRANSITION);
+    TEST_ASSERT_EQUAL_PTR(s->trans_dsc, d);
+    TEST_ASSERT_EQUAL_UINT32(140, d->time);
+}
+
+static void test_re_registering_with_a_bad_property_leaves_the_original_transition_intact(void)
+{
+    log_capture_start();
+    ASSERT_XML_REGISTERS("trans_reextend_badprop",
+                         "<component>"
+                         "  <styles>"
+                         "    <style name=\"t\" transition_props=\"opa\" transition_duration=\"140\"/>"
+                         "    <style name=\"t\" transition_props=\"opa|bg_image_src\" transition_duration=\"999\"/>"
+                         "  </styles>"
+                         "  <view extends=\"lv_obj\" name=\"reextend_badprop_root\"/>"
+                         "</component>");
+    log_capture_stop();
+
+    TEST_ASSERT_TRUE(log_contains("bg_image_src"));
+
+    lv_xml_component_scope_t * scope = lv_xml_component_get_scope("trans_reextend_badprop");
+    lv_xml_style_t * s = lv_xml_get_style_by_name(scope, "t");
+    TEST_ASSERT_NOT_NULL(s);
+
+    TEST_ASSERT_NOT_NULL_MESSAGE(s->trans_dsc,
+                                 "a failed re-registration must not destroy the original transition");
+    const lv_style_transition_dsc_t * d = style_prop_ptr(s, LV_STYLE_TRANSITION);
+    TEST_ASSERT_EQUAL_PTR(s->trans_dsc, d);
+    TEST_ASSERT_EQUAL_UINT32(140, d->time);
+}
+
 static void test_clearing_a_transition_removes_the_property_and_is_idempotent(void)
 {
     ASSERT_XML_REGISTERS("trans_clear",
@@ -1214,6 +1275,8 @@ int main(void)
     RUN_TEST(test_a_non_interpolatable_transition_prop_is_rejected_by_name);
     RUN_TEST(test_re_registering_a_style_replaces_its_transition);
     RUN_TEST(test_re_registering_without_transition_attributes_preserves_the_existing_transition);
+    RUN_TEST(test_re_registering_with_only_duration_leaves_the_original_transition_intact);
+    RUN_TEST(test_re_registering_with_a_bad_property_leaves_the_original_transition_intact);
     RUN_TEST(test_clearing_a_transition_removes_the_property_and_is_idempotent);
 
     return UNITY_END();

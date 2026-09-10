@@ -1205,6 +1205,125 @@ static void test_re_registering_with_a_bad_property_leaves_the_original_transiti
     TEST_ASSERT_EQUAL_UINT32(140, d->time);
 }
 
+/*---------------------------------------------------------------------------
+ * transition (CSS-style shorthand)
+ *--------------------------------------------------------------------------*/
+
+static void test_shorthand_transition_parses_props_duration_easing_and_delay(void)
+{
+    ASSERT_XML_REGISTERS("trans_short",
+                         "<component>"
+                         "  <styles>"
+                         "    <style name=\"t\" transition=\"opa|transform_scale_x 200ms ease_out 30ms\"/>"
+                         "  </styles>"
+                         "  <view extends=\"lv_obj\" name=\"short_root\"/>"
+                         "</component>");
+
+    lv_xml_component_scope_t * scope = lv_xml_component_get_scope("trans_short");
+    lv_xml_style_t * s = lv_xml_get_style_by_name(scope, "t");
+    const lv_style_transition_dsc_t * d = style_prop_ptr(s, LV_STYLE_TRANSITION);
+
+    TEST_ASSERT_EQUAL_UINT32(200, d->time);
+    TEST_ASSERT_EQUAL_UINT32(30, d->delay);
+    TEST_ASSERT_EQUAL_PTR(lv_anim_path_ease_out, d->path_xcb);
+    TEST_ASSERT_EQUAL_INT(LV_STYLE_OPA, d->props[0]);
+    TEST_ASSERT_EQUAL_INT(LV_STYLE_TRANSFORM_SCALE_X, d->props[1]);
+    TEST_ASSERT_EQUAL_INT(0, d->props[2]);
+}
+
+static void test_shorthand_defaults_easing_to_linear_and_delay_to_zero(void)
+{
+    ASSERT_XML_REGISTERS("trans_short_min",
+                         "<component>"
+                         "  <styles>"
+                         "    <style name=\"t\" transition=\"opa 90\"/>"
+                         "  </styles>"
+                         "  <view extends=\"lv_obj\" name=\"short_min_root\"/>"
+                         "</component>");
+
+    lv_xml_component_scope_t * scope = lv_xml_component_get_scope("trans_short_min");
+    lv_xml_style_t * s = lv_xml_get_style_by_name(scope, "t");
+    const lv_style_transition_dsc_t * d = style_prop_ptr(s, LV_STYLE_TRANSITION);
+
+    TEST_ASSERT_EQUAL_UINT32(90, d->time);
+    TEST_ASSERT_EQUAL_UINT32(0, d->delay);
+    TEST_ASSERT_EQUAL_PTR(lv_anim_path_linear, d->path_xcb);
+}
+
+/*
+ * Attribute order in XML is not dependable, so precedence between the two
+ * spellings is stated as a rule, not an accident of iteration: each longhand
+ * field wins over the matching shorthand field, whichever attribute the
+ * parser reaches first. Both orderings of the same two attributes must land
+ * on the identical result.
+ */
+static void test_longhand_overrides_the_matching_shorthand_field(void)
+{
+    ASSERT_XML_REGISTERS("trans_mixed",
+                         "<component>"
+                         "  <styles>"
+                         "    <style name=\"t\" transition=\"opa 200ms ease_out\""
+                         "           transition_duration=\"55\"/>"
+                         "  </styles>"
+                         "  <view extends=\"lv_obj\" name=\"mixed_root\"/>"
+                         "</component>");
+
+    lv_xml_component_scope_t * scope = lv_xml_component_get_scope("trans_mixed");
+    lv_xml_style_t * s = lv_xml_get_style_by_name(scope, "t");
+    const lv_style_transition_dsc_t * d = style_prop_ptr(s, LV_STYLE_TRANSITION);
+
+    TEST_ASSERT_EQUAL_UINT32(55, d->time);
+    TEST_ASSERT_EQUAL_PTR(lv_anim_path_ease_out, d->path_xcb);   /* untouched half survives */
+}
+
+static void test_longhand_overrides_the_matching_shorthand_field_regardless_of_attribute_order(void)
+{
+    ASSERT_XML_REGISTERS("trans_mixed_reordered",
+                         "<component>"
+                         "  <styles>"
+                         "    <style name=\"t\" transition_duration=\"55\""
+                         "           transition=\"opa 200ms ease_out\"/>"
+                         "  </styles>"
+                         "  <view extends=\"lv_obj\" name=\"mixed_reordered_root\"/>"
+                         "</component>");
+
+    lv_xml_component_scope_t * scope = lv_xml_component_get_scope("trans_mixed_reordered");
+    lv_xml_style_t * s = lv_xml_get_style_by_name(scope, "t");
+    const lv_style_transition_dsc_t * d = style_prop_ptr(s, LV_STYLE_TRANSITION);
+
+    TEST_ASSERT_EQUAL_UINT32(55, d->time);
+    TEST_ASSERT_EQUAL_PTR(lv_anim_path_ease_out, d->path_xcb);
+}
+
+/*
+ * A token that is neither a recognised easing name nor a number cannot be
+ * placed anywhere in the grammar, so the whole shorthand is refused rather
+ * than guessing which field it meant - the same "leave what was there alone"
+ * contract the longhand failure paths already keep.
+ */
+static void test_shorthand_with_an_unrecognised_third_token_warns_and_is_refused(void)
+{
+    log_capture_start();
+    ASSERT_XML_REGISTERS("trans_short_bad",
+                         "<component>"
+                         "  <styles>"
+                         "    <style name=\"t\" transition_props=\"opa\" transition_duration=\"140\"/>"
+                         "    <style name=\"t\" transition=\"opa 90 sideways\"/>"
+                         "  </styles>"
+                         "  <view extends=\"lv_obj\" name=\"short_bad_root\"/>"
+                         "</component>");
+    log_capture_stop();
+
+    TEST_ASSERT_TRUE(log_contains("sideways"));
+
+    lv_xml_component_scope_t * scope = lv_xml_component_get_scope("trans_short_bad");
+    lv_xml_style_t * s = lv_xml_get_style_by_name(scope, "t");
+    TEST_ASSERT_NOT_NULL_MESSAGE(s->trans_dsc,
+                                 "a refused shorthand must not destroy the original transition");
+    const lv_style_transition_dsc_t * d = style_prop_ptr(s, LV_STYLE_TRANSITION);
+    TEST_ASSERT_EQUAL_UINT32(140, d->time);
+}
+
 static void test_clearing_a_transition_removes_the_property_and_is_idempotent(void)
 {
     ASSERT_XML_REGISTERS("trans_clear",
@@ -1277,6 +1396,13 @@ int main(void)
     RUN_TEST(test_re_registering_without_transition_attributes_preserves_the_existing_transition);
     RUN_TEST(test_re_registering_with_only_duration_leaves_the_original_transition_intact);
     RUN_TEST(test_re_registering_with_a_bad_property_leaves_the_original_transition_intact);
+
+    RUN_TEST(test_shorthand_transition_parses_props_duration_easing_and_delay);
+    RUN_TEST(test_shorthand_defaults_easing_to_linear_and_delay_to_zero);
+    RUN_TEST(test_longhand_overrides_the_matching_shorthand_field);
+    RUN_TEST(test_longhand_overrides_the_matching_shorthand_field_regardless_of_attribute_order);
+    RUN_TEST(test_shorthand_with_an_unrecognised_third_token_warns_and_is_refused);
+
     RUN_TEST(test_clearing_a_transition_removes_the_property_and_is_idempotent);
 
     return UNITY_END();

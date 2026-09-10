@@ -35,7 +35,8 @@
  **********************/
 
 static lv_anim_path_cb_t transition_easing_to_cb(const char * txt);
-static uint32_t transition_time_to_ms(const char * txt);
+static bool transition_time_to_ms(const char * txt, const char * style_name,
+                                  const char * attr_name, uint32_t * out_ms);
 static void style_transition_install(lv_xml_style_t * xs, const char * props_str,
                                      uint32_t time, uint32_t delay, lv_anim_path_cb_t path,
                                      const char * style_name);
@@ -308,8 +309,8 @@ lv_result_t lv_xml_register_style(lv_xml_component_scope_t * scope, const char *
         else SET_STYLE_IF(transform_scale_x, lv_xml_atoi(value));
         else SET_STYLE_IF(transform_scale_y, lv_xml_atoi(value));
         else SET_STYLE_IF(transform_rotation, lv_xml_atoi(value));
-        else SET_STYLE_IF(transform_pivot_x, lv_xml_atoi(value));
-        else SET_STYLE_IF(transform_pivot_y, lv_xml_atoi(value));
+        else SET_STYLE_IF(transform_pivot_x, lv_xml_to_size(value));
+        else SET_STYLE_IF(transform_pivot_y, lv_xml_to_size(value));
         else SET_STYLE_IF(transform_skew_x, lv_xml_atoi(value));
         else SET_STYLE_IF(transform_skew_y, lv_xml_atoi(value));
         else SET_STYLE_IF(bitmap_mask_src, lv_xml_get_image(scope, value));
@@ -380,19 +381,28 @@ lv_result_t lv_xml_register_style(lv_xml_component_scope_t * scope, const char *
             trans.props_set = true;
         }
         else if(lv_streq(name, "transition_duration")) {
-            trans.duration = transition_time_to_ms(value);
-            trans.seen = true;
-            trans.duration_set = true;
+            if(transition_time_to_ms(value, style_name, "transition_duration", &trans.duration)) {
+                trans.seen = true;
+                trans.duration_set = true;
+            }
         }
         else if(lv_streq(name, "transition_easing")) {
-            trans.easing = transition_easing_to_cb(value);
-            trans.seen = true;
-            trans.easing_set = true;
+            lv_anim_path_cb_t cb = transition_easing_to_cb(value);
+            if(cb == NULL) {
+                LV_LOG_WARN("`%s` is not a known easing name, in `transition_easing` of style `%s`",
+                            value, style_name);
+            }
+            else {
+                trans.easing = cb;
+                trans.seen = true;
+                trans.easing_set = true;
+            }
         }
         else if(lv_streq(name, "transition_delay")) {
-            trans.delay = transition_time_to_ms(value);
-            trans.seen = true;
-            trans.delay_set = true;
+            if(transition_time_to_ms(value, style_name, "transition_delay", &trans.delay)) {
+                trans.seen = true;
+                trans.delay_set = true;
+            }
         }
         else if(lv_streq(name, "transition")) {
             if(transition_parse_shorthand(value, trans_short_buf, sizeof(trans_short_buf), style_name,
@@ -551,17 +561,54 @@ static lv_anim_path_cb_t transition_easing_to_cb(const char * txt)
     return NULL;
 }
 
-/* lv_xml_atoi() stops at the 'm' of "200ms", so a `ms`-suffixed duration or
- * delay parses to the same value as its bare numeral. */
-static uint32_t transition_time_to_ms(const char * txt)
+/**
+ * Parse a transition duration or delay: a non-negative decimal integer,
+ * optionally followed by an `ms` suffix, and nothing else. A value ending in
+ * a bare `s` gets its own message, since writing a duration in seconds is
+ * the single most common mistake carried over from CSS.
+ * @param txt         the raw attribute value or shorthand token
+ * @param style_name  the style's name, for warning messages
+ * @param attr_name   the attribute or shorthand field `txt` came from, for
+ *                    warning messages
+ * @param out_ms      set to the parsed value in ms on success; untouched on failure
+ * @return true if `txt` parsed as a valid duration; false if it was refused
+ */
+static bool transition_time_to_ms(const char * txt, const char * style_name,
+                                  const char * attr_name, uint32_t * out_ms)
 {
-    return (uint32_t)lv_xml_atoi(txt);
+    if(txt[0] == '-') {
+        LV_LOG_WARN("`%s` is a negative value in `%s` of style `%s`; transition durations "
+                    "cannot be negative", txt, attr_name, style_name);
+        return false;
+    }
+
+    const char * p = txt;
+    while(*p >= '0' && *p <= '9') p++;
+    bool well_formed = (p != txt) && (p[0] == '\0' || lv_streq(p, "ms"));
+
+    if(!well_formed) {
+        size_t len = lv_strlen(txt);
+        bool trailing_s = len > 0 && txt[len - 1] == 's' &&
+                          !(len > 1 && txt[len - 2] == 'm');
+        if(trailing_s) {
+            LV_LOG_WARN("`%s` in `%s` of style `%s` looks like seconds; transition durations "
+                        "are written in milliseconds", txt, attr_name, style_name);
+        }
+        else {
+            LV_LOG_WARN("`%s` is not a valid duration in `%s` of style `%s`; expected a number "
+                        "optionally followed by `ms`", txt, attr_name, style_name);
+        }
+        return false;
+    }
+
+    *out_ms = (uint32_t)lv_xml_atoi(txt);
+    return true;
 }
 
 /**
  * Parse the CSS-style `transition="<props> <duration> [easing] [delay]"`
  * shorthand into the same fields the longhand attributes fill. Tokens split
- * on whitespace: the first is the `|`-separated property list, the second
+ * on whitespace: the first is the property list (`|` or `,` separated), the second
  * the duration, and each token after that is classified on its own terms -
  * a recognised easing name or a number - since either may be omitted and
  * their order is otherwise fixed. A token that is neither is refused rather
@@ -596,8 +643,10 @@ static bool transition_parse_shorthand(const char * value, char * buf, size_t bu
         return false;
     }
 
+    if(!transition_time_to_ms(duration_tok, style_name, "transition duration", duration)) {
+        return false;
+    }
     *props_str = props_tok;
-    *duration = transition_time_to_ms(duration_tok);
     *easing = NULL;
     *delay = 0;
 
@@ -608,7 +657,9 @@ static bool transition_parse_shorthand(const char * value, char * buf, size_t bu
             *easing = cb;
         }
         else if(tok[0] >= '0' && tok[0] <= '9') {
-            *delay = transition_time_to_ms(tok);
+            if(!transition_time_to_ms(tok, style_name, "transition delay", delay)) {
+                return false;
+            }
         }
         else {
             LV_LOG_WARN("`%s` is neither an easing name nor a number, in `transition` shorthand "
@@ -628,7 +679,8 @@ static bool transition_parse_shorthand(const char * value, char * buf, size_t bu
  * transition, untouched, on any failure - never with neither the old
  * transition nor a new one.
  * @param xs            the style to install onto
- * @param props_str     `|`-separated style property names, or NULL for none
+ * @param props_str     style property names separated by `|`, `,` or
+ *                      whitespace, or NULL for none
  * @param time          transition duration in ms
  * @param delay         transition delay in ms
  * @param path          easing callback, or NULL for linear
@@ -647,6 +699,12 @@ static void style_transition_install(lv_xml_style_t * xs, const char * props_str
     char buf[256];
     lv_strncpy(buf, props_str, sizeof(buf));
     buf[sizeof(buf) - 1] = '\0';
+
+    /* `,` and whitespace are accepted as well as `|` and normalized to it here,
+     * the same delimiter set lv_xml_border_side_to_enum() accepts. */
+    for(char * p = buf; *p; p++) {
+        if(*p == ',' || *p == ' ' || *p == '\t') *p = '|';
+    }
 
     /* Count first so the array is allocated once, then fill. */
     uint32_t cnt = 1;

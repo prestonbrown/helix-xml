@@ -1570,8 +1570,8 @@ static void apply_styles(lv_xml_parser_state_t * state, lv_obj_t * obj, const ch
     else SET_STYLE_IF(transform_scale_x, lv_xml_atoi(value));
     else SET_STYLE_IF(transform_scale_y, lv_xml_atoi(value));
     else SET_STYLE_IF(transform_rotation, lv_xml_atoi(value));
-    else SET_STYLE_IF(transform_pivot_x, lv_xml_atoi(value));
-    else SET_STYLE_IF(transform_pivot_y, lv_xml_atoi(value));
+    else SET_STYLE_IF(transform_pivot_x, lv_xml_to_size(value));
+    else SET_STYLE_IF(transform_pivot_y, lv_xml_to_size(value));
     else SET_STYLE_IF(transform_skew_x, lv_xml_atoi(value));
     else SET_STYLE_IF(transform_skew_y, lv_xml_atoi(value));
     else SET_STYLE_IF(bitmap_mask_src, lv_xml_get_image(&state->scope, value));

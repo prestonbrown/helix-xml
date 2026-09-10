@@ -1044,6 +1044,65 @@ static void test_const_reference_in_a_style_property_resolves_and_reports_misses
 }
 
 /*---------------------------------------------------------------------------
+ * transform_pivot_x / transform_pivot_y percentages
+ *
+ * Both dispatch sites route every other percent-capable transform property
+ * through lv_xml_to_size(), which is what turns a trailing `%` into
+ * lv_pct(v); the pivot properties are covered separately here because a
+ * plain lv_xml_atoi() stops at the `%` and silently yields a bare pixel
+ * count instead.
+ *--------------------------------------------------------------------------*/
+
+static void test_transform_pivot_percent_and_plain_values_both_parse_in_a_style(void)
+{
+    ASSERT_XML_REGISTERS("style_pivot",
+                         "<component>"
+                         "  <styles>"
+                         "    <style name=\"pct\" transform_pivot_x=\"50%\" transform_pivot_y=\"50%\"/>"
+                         "    <style name=\"px\" transform_pivot_x=\"12\" transform_pivot_y=\"12\"/>"
+                         "  </styles>"
+                         "  <view extends=\"lv_obj\" name=\"pivot_root\"/>"
+                         "</component>");
+
+    lv_xml_component_scope_t * scope = lv_xml_component_get_scope("style_pivot");
+    lv_xml_style_t * pct = lv_xml_get_style_by_name(scope, "pct");
+    lv_xml_style_t * px = lv_xml_get_style_by_name(scope, "px");
+    TEST_ASSERT_NOT_NULL(pct);
+    TEST_ASSERT_NOT_NULL(px);
+
+    TEST_ASSERT_EQUAL_INT32_MESSAGE(lv_pct(50), style_prop_num(pct, LV_STYLE_TRANSFORM_PIVOT_X),
+                                    "a `%` pivot must encode with lv_pct(), not land as raw pixels");
+    TEST_ASSERT_EQUAL_INT32(lv_pct(50), style_prop_num(pct, LV_STYLE_TRANSFORM_PIVOT_Y));
+    TEST_ASSERT_EQUAL_INT32(12, style_prop_num(px, LV_STYLE_TRANSFORM_PIVOT_X));
+    TEST_ASSERT_EQUAL_INT32(12, style_prop_num(px, LV_STYLE_TRANSFORM_PIVOT_Y));
+}
+
+/** Same two values, through the inline `style_*` attribute dispatch in the obj parser. */
+static void test_transform_pivot_percent_and_plain_values_both_parse_as_inline_attributes(void)
+{
+    ASSERT_XML_REGISTERS("obj_pivot",
+                         "<component>"
+                         "  <view extends=\"lv_obj\" name=\"obj_pivot_root\">"
+                         "    <lv_obj name=\"pct_obj\" style_transform_pivot_x=\"50%\""
+                         "            style_transform_pivot_y=\"50%\"/>"
+                         "    <lv_obj name=\"px_obj\" style_transform_pivot_x=\"12\""
+                         "            style_transform_pivot_y=\"12\"/>"
+                         "  </view>"
+                         "</component>");
+
+    lv_obj_t * root = XML_CREATE(helix_test_env_screen(), "obj_pivot", NULL);
+    helix_test_pump(30);
+
+    lv_obj_t * pct_obj = ASSERT_NAMED(root, "pct_obj");
+    lv_obj_t * px_obj = ASSERT_NAMED(root, "px_obj");
+
+    ASSERT_STYLE_INT(pct_obj, LV_STYLE_TRANSFORM_PIVOT_X, LV_PART_MAIN, lv_pct(50));
+    ASSERT_STYLE_INT(pct_obj, LV_STYLE_TRANSFORM_PIVOT_Y, LV_PART_MAIN, lv_pct(50));
+    ASSERT_STYLE_INT(px_obj, LV_STYLE_TRANSFORM_PIVOT_X, LV_PART_MAIN, 12);
+    ASSERT_STYLE_INT(px_obj, LV_STYLE_TRANSFORM_PIVOT_Y, LV_PART_MAIN, 12);
+}
+
+/*---------------------------------------------------------------------------
  * transition_props/transition_duration/transition_easing/transition_delay
  *--------------------------------------------------------------------------*/
 
@@ -1210,6 +1269,143 @@ static void test_re_registering_with_a_bad_property_leaves_the_original_transiti
     const lv_style_transition_dsc_t * d = style_prop_ptr(s, LV_STYLE_TRANSITION);
     TEST_ASSERT_EQUAL_PTR(s->trans_dsc, d);
     TEST_ASSERT_EQUAL_UINT32(140, d->time);
+}
+
+/*
+ * An unrecognised `transition_easing` must warn and refuse that field alone,
+ * the same as the shorthand already does for the same typo - not silently
+ * store NULL and clobber a valid easing a shorthand on the same element
+ * already supplied.
+ */
+static void test_longhand_transition_with_an_unrecognised_easing_warns_and_falls_back_to_the_shorthand(void)
+{
+    log_capture_start();
+    ASSERT_XML_REGISTERS("trans_easing_bad",
+                         "<component>"
+                         "  <styles>"
+                         "    <style name=\"t\" transition=\"opa 200ms ease_out\""
+                         "           transition_easing=\"sideways\"/>"
+                         "  </styles>"
+                         "  <view extends=\"lv_obj\" name=\"easing_bad_root\"/>"
+                         "</component>");
+    log_capture_stop();
+
+    TEST_ASSERT_TRUE_MESSAGE(log_contains("sideways"),
+                             "an unrecognised transition_easing must warn, naming the bad value");
+
+    lv_xml_component_scope_t * scope = lv_xml_component_get_scope("trans_easing_bad");
+    lv_xml_style_t * s = lv_xml_get_style_by_name(scope, "t");
+    TEST_ASSERT_NOT_NULL(s);
+
+    const lv_style_transition_dsc_t * d = style_prop_ptr(s, LV_STYLE_TRANSITION);
+    TEST_ASSERT_EQUAL_PTR_MESSAGE(lv_anim_path_ease_out, d->path_xcb,
+                                  "a refused longhand easing must not clobber a valid easing "
+                                  "the shorthand on the same element already supplied");
+}
+
+/*---------------------------------------------------------------------------
+ * transition_duration / transition_delay validation
+ *
+ * Each case pairs an invalid longhand value with a valid shorthand on the
+ * same element: the shorthand's field must survive untouched, which only
+ * happens if the invalid longhand is refused rather than silently installed
+ * (as 0, or wrapped from a negative, or truncated at the first non-digit).
+ *--------------------------------------------------------------------------*/
+
+/** `0.2s` is how a web developer writes a duration; this dialect's are in ms. */
+static void test_a_duration_written_in_seconds_warns_and_is_refused(void)
+{
+    log_capture_start();
+    ASSERT_XML_REGISTERS("trans_duration_seconds",
+                         "<component>"
+                         "  <styles>"
+                         "    <style name=\"t\" transition=\"opa 300ms\""
+                         "           transition_duration=\"0.2s\"/>"
+                         "  </styles>"
+                         "  <view extends=\"lv_obj\" name=\"duration_seconds_root\"/>"
+                         "</component>");
+    log_capture_stop();
+
+    TEST_ASSERT_TRUE_MESSAGE(log_contains("milliseconds"),
+                             "a seconds-style duration must warn that durations are in ms");
+
+    lv_xml_component_scope_t * scope = lv_xml_component_get_scope("trans_duration_seconds");
+    lv_xml_style_t * s = lv_xml_get_style_by_name(scope, "t");
+    const lv_style_transition_dsc_t * d = style_prop_ptr(s, LV_STYLE_TRANSITION);
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(300, d->time,
+                                     "a refused duration must fall back to the shorthand's, "
+                                     "not silently become 0");
+}
+
+static void test_a_negative_delay_warns_and_is_refused(void)
+{
+    log_capture_start();
+    ASSERT_XML_REGISTERS("trans_delay_negative",
+                         "<component>"
+                         "  <styles>"
+                         "    <style name=\"t\" transition=\"opa 100ms ease_out 40ms\""
+                         "           transition_delay=\"-50\"/>"
+                         "  </styles>"
+                         "  <view extends=\"lv_obj\" name=\"delay_negative_root\"/>"
+                         "</component>");
+    log_capture_stop();
+
+    TEST_ASSERT_TRUE_MESSAGE(log_contains("negative"),
+                             "a negative delay must warn rather than wrap to a huge unsigned value");
+
+    lv_xml_component_scope_t * scope = lv_xml_component_get_scope("trans_delay_negative");
+    lv_xml_style_t * s = lv_xml_get_style_by_name(scope, "t");
+    const lv_style_transition_dsc_t * d = style_prop_ptr(s, LV_STYLE_TRANSITION);
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(40, d->delay,
+                                     "a refused delay must fall back to the shorthand's, "
+                                     "not wrap to roughly 4.29e9ms");
+}
+
+static void test_a_non_numeric_duration_warns_and_is_refused(void)
+{
+    log_capture_start();
+    ASSERT_XML_REGISTERS("trans_duration_nonnumeric",
+                         "<component>"
+                         "  <styles>"
+                         "    <style name=\"t\" transition=\"opa 150ms\""
+                         "           transition_duration=\"abc\"/>"
+                         "  </styles>"
+                         "  <view extends=\"lv_obj\" name=\"duration_nonnumeric_root\"/>"
+                         "</component>");
+    log_capture_stop();
+
+    TEST_ASSERT_TRUE_MESSAGE(log_contains("abc"),
+                             "a non-numeric duration must warn, naming the bad value");
+
+    lv_xml_component_scope_t * scope = lv_xml_component_get_scope("trans_duration_nonnumeric");
+    lv_xml_style_t * s = lv_xml_get_style_by_name(scope, "t");
+    const lv_style_transition_dsc_t * d = style_prop_ptr(s, LV_STYLE_TRANSITION);
+    TEST_ASSERT_EQUAL_UINT32(150, d->time);
+}
+
+/*---------------------------------------------------------------------------
+ * transition_props separators
+ *--------------------------------------------------------------------------*/
+
+/** `,` (and surrounding whitespace) must work the same as `|`. */
+static void test_transition_props_accepts_commas_as_well_as_pipes(void)
+{
+    ASSERT_XML_REGISTERS("trans_comma",
+                         "<component>"
+                         "  <styles>"
+                         "    <style name=\"t\" transition_props=\"opa, transform_scale_x\""
+                         "           transition_duration=\"180\"/>"
+                         "  </styles>"
+                         "  <view extends=\"lv_obj\" name=\"comma_root\"/>"
+                         "</component>");
+
+    lv_xml_component_scope_t * scope = lv_xml_component_get_scope("trans_comma");
+    lv_xml_style_t * s = lv_xml_get_style_by_name(scope, "t");
+    const lv_style_transition_dsc_t * d = style_prop_ptr(s, LV_STYLE_TRANSITION);
+
+    TEST_ASSERT_EQUAL_INT(LV_STYLE_OPA, d->props[0]);
+    TEST_ASSERT_EQUAL_INT(LV_STYLE_TRANSFORM_SCALE_X, d->props[1]);
+    TEST_ASSERT_EQUAL_INT(0, d->props[2]);
 }
 
 /*---------------------------------------------------------------------------
@@ -1414,6 +1610,60 @@ static void test_a_style_registered_after_the_scale_is_set_is_born_scaled(void)
     lv_xml_set_transition_scale(256);
 }
 
+/*
+ * A scope retired while one of its styles is still borrowed by another
+ * scope's widget moves onto `pending_free_scope_ll`, out of the live
+ * registry but still backing that widget's lv_style_t storage. A scale
+ * change must retime its descriptors there too - that second list is the
+ * entire justification for not maintaining a separate descriptor registry.
+ */
+static void test_scale_change_retimes_a_retired_scope_with_borrowed_styles(void)
+{
+    ASSERT_XML_REGISTERS("trans_a5_donor",
+                         "<component>"
+                         "  <styles>"
+                         "    <style name=\"t\" transition=\"opa 200ms\"/>"
+                         "  </styles>"
+                         "  <view extends=\"lv_obj\" name=\"donor_root\"/>"
+                         "</component>");
+
+    ASSERT_XML_REGISTERS("trans_a5_borrower",
+                         "<component>"
+                         "  <view extends=\"lv_obj\" name=\"borrower_root\">"
+                         "    <lv_obj name=\"borrower_child\">"
+                         "      <style name=\"trans_a5_donor.t\"/>"
+                         "    </lv_obj>"
+                         "  </view>"
+                         "</component>");
+
+    lv_obj_t * borrower_root = XML_CREATE(helix_test_env_screen(), "trans_a5_borrower", NULL);
+    helix_test_pump(30);
+
+    lv_xml_component_scope_t * donor_scope = lv_xml_component_get_scope("trans_a5_donor");
+    TEST_ASSERT_NOT_NULL(donor_scope);
+    TEST_ASSERT_TRUE_MESSAGE(donor_scope->styles_borrowed,
+                             "the borrower's dotted style reference must mark the donor scope borrowed");
+
+    lv_xml_style_t * donor_style = lv_xml_get_style_by_name(donor_scope, "t");
+    TEST_ASSERT_NOT_NULL(donor_style);
+    const lv_style_transition_dsc_t * d = style_prop_ptr(donor_style, LV_STYLE_TRANSITION);
+    TEST_ASSERT_EQUAL_UINT32(200, d->time);
+
+    /* borrower_child still points at donor_style's lv_style_t storage, so this
+     * must retire the donor scope onto the pending-free list rather than free
+     * it outright. */
+    lv_xml_component_unregister("trans_a5_donor");
+    TEST_ASSERT_NULL_MESSAGE(lv_xml_component_get_scope("trans_a5_donor"),
+                             "a retired scope must leave the live, findable registry");
+
+    lv_xml_set_transition_scale(128);
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(100, d->time,
+                                     "a scale change must retime a retired scope's descriptors "
+                                     "too, not just those still in the live registry");
+
+    lv_xml_set_transition_scale(256);
+}
+
 /*---------------------------------------------------------------------------
  * main
  *--------------------------------------------------------------------------*/
@@ -1453,12 +1703,22 @@ int main(void)
     RUN_TEST(test_remove_value_deletes_the_property_from_the_style);
     RUN_TEST(test_const_reference_in_a_style_property_resolves_and_reports_misses);
 
+    RUN_TEST(test_transform_pivot_percent_and_plain_values_both_parse_in_a_style);
+    RUN_TEST(test_transform_pivot_percent_and_plain_values_both_parse_as_inline_attributes);
+
     RUN_TEST(test_longhand_transition_builds_a_descriptor_on_the_style);
     RUN_TEST(test_a_non_interpolatable_transition_prop_is_rejected_by_name);
     RUN_TEST(test_re_registering_a_style_replaces_its_transition);
     RUN_TEST(test_re_registering_without_transition_attributes_preserves_the_existing_transition);
     RUN_TEST(test_re_registering_with_only_duration_leaves_the_original_transition_intact);
     RUN_TEST(test_re_registering_with_a_bad_property_leaves_the_original_transition_intact);
+    RUN_TEST(test_longhand_transition_with_an_unrecognised_easing_warns_and_falls_back_to_the_shorthand);
+
+    RUN_TEST(test_a_duration_written_in_seconds_warns_and_is_refused);
+    RUN_TEST(test_a_negative_delay_warns_and_is_refused);
+    RUN_TEST(test_a_non_numeric_duration_warns_and_is_refused);
+
+    RUN_TEST(test_transition_props_accepts_commas_as_well_as_pipes);
 
     RUN_TEST(test_shorthand_transition_parses_props_duration_easing_and_delay);
     RUN_TEST(test_shorthand_defaults_easing_to_linear_and_delay_to_zero);
@@ -1470,6 +1730,7 @@ int main(void)
 
     RUN_TEST(test_transition_scale_retimes_registered_descriptors_without_compounding);
     RUN_TEST(test_a_style_registered_after_the_scale_is_set_is_born_scaled);
+    RUN_TEST(test_scale_change_retimes_a_retired_scope_with_borrowed_styles);
 
     return UNITY_END();
 }

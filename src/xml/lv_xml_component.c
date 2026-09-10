@@ -34,17 +34,10 @@
 /**********************
  *      TYPEDEFS
  **********************/
-typedef enum {
-    STYLE_PROP_TYPE_INT,
-    STYLE_PROP_TYPE_OPA,
-    STYLE_PROP_TYPE_COLOR,
-    STYLE_PROP_TYPE_UNKNOWN
-} style_prop_anim_type_t;
-
 typedef struct {
     lv_style_selector_t selector;
     lv_style_prop_t prop;
-    style_prop_anim_type_t prop_type;
+    lv_xml_style_prop_anim_type_t prop_type;
     lv_color_t color_start;
     lv_color_t color_end;
 } anim_data_t;
@@ -60,7 +53,6 @@ static void process_image_element(lv_xml_parser_state_t * state, const char * ty
 static void process_prop_element(lv_xml_parser_state_t * state, const char * name, const char ** attrs);
 static void process_subject_expr_element(lv_xml_parser_state_t * state, const char ** attrs);
 static char * extract_view_content(const char * xml_definition);
-static style_prop_anim_type_t style_prop_anim_get_type(lv_style_prop_t prop);
 static void anim_exec_cb(lv_anim_t * a, int32_t v);
 static void component_scope_retire(lv_xml_component_scope_t * scope);
 static void component_scope_free(lv_xml_component_scope_t * scope);
@@ -1159,8 +1151,8 @@ static void process_animation_element(lv_xml_parser_state_t * state, const char 
         return;
     }
 
-    style_prop_anim_type_t prop_type = style_prop_anim_get_type(prop);
-    if(prop_type == STYLE_PROP_TYPE_UNKNOWN) {
+    lv_xml_style_prop_anim_type_t prop_type = lv_xml_style_prop_anim_type(prop);
+    if(prop_type == LV_XML_STYLE_PROP_ANIM_UNKNOWN) {
         LV_LOG_WARN("Style property '%s' is not animateable", prop_str);
         return;
     }
@@ -1216,19 +1208,19 @@ static void process_animation_element(lv_xml_parser_state_t * state, const char 
 
     lv_anim_init(a);
 
-    if(prop_type == STYLE_PROP_TYPE_INT) {
+    if(prop_type == LV_XML_STYLE_PROP_ANIM_INT) {
         int32_t start = lv_xml_to_size(start_str);
         int32_t end = lv_xml_to_size(end_str);
         lv_anim_set_values(a, start, end);
         lv_anim_set_custom_exec_cb(a, anim_exec_cb);
     }
-    else if(prop_type == STYLE_PROP_TYPE_OPA) {
+    else if(prop_type == LV_XML_STYLE_PROP_ANIM_OPA) {
         int32_t start = lv_xml_to_opa(start_str);
         int32_t end = lv_xml_to_opa(end_str);
         lv_anim_set_values(a, start, end);
         lv_anim_set_custom_exec_cb(a, anim_exec_cb);
     }
-    else if(prop_type == STYLE_PROP_TYPE_COLOR) {
+    else if(prop_type == LV_XML_STYLE_PROP_ANIM_COLOR) {
         anim_data->color_start = lv_xml_to_color(start_str);
         anim_data->color_end = lv_xml_to_color(end_str);
         lv_anim_set_values(a, 0, 255);
@@ -1686,97 +1678,15 @@ static char * extract_view_content(const char * xml_definition)
 }
 
 
-static style_prop_anim_type_t style_prop_anim_get_type(lv_style_prop_t prop)
-{
-    switch(prop) {
-        case LV_STYLE_WIDTH:
-        case LV_STYLE_MIN_WIDTH:
-        case LV_STYLE_MAX_WIDTH:
-        case LV_STYLE_HEIGHT:
-        case LV_STYLE_MIN_HEIGHT:
-        case LV_STYLE_MAX_HEIGHT:
-        case LV_STYLE_LENGTH:
-        case LV_STYLE_RADIUS:
-        case LV_STYLE_PAD_LEFT:
-        case LV_STYLE_PAD_RIGHT:
-        case LV_STYLE_PAD_TOP:
-        case LV_STYLE_PAD_BOTTOM:
-        case LV_STYLE_PAD_ROW:
-        case LV_STYLE_PAD_COLUMN:
-        case LV_STYLE_PAD_RADIAL:
-        case LV_STYLE_MARGIN_LEFT:
-        case LV_STYLE_MARGIN_RIGHT:
-        case LV_STYLE_MARGIN_TOP:
-        case LV_STYLE_MARGIN_BOTTOM:
-        case LV_STYLE_BG_MAIN_STOP:
-        case LV_STYLE_BG_GRAD_STOP:
-        case LV_STYLE_BG_IMAGE_RECOLOR_OPA:
-        case LV_STYLE_BORDER_WIDTH:
-        case LV_STYLE_OUTLINE_WIDTH:
-        case LV_STYLE_OUTLINE_PAD:
-        case LV_STYLE_SHADOW_WIDTH:
-        case LV_STYLE_SHADOW_OFFSET_X:
-        case LV_STYLE_SHADOW_OFFSET_Y:
-        case LV_STYLE_SHADOW_SPREAD:
-        case LV_STYLE_TEXT_LETTER_SPACE:
-        case LV_STYLE_TEXT_LINE_SPACE:
-        case LV_STYLE_LINE_WIDTH:
-        case LV_STYLE_LINE_DASH_WIDTH:
-        case LV_STYLE_LINE_DASH_GAP:
-        case LV_STYLE_ARC_WIDTH:
-        case LV_STYLE_TRANSFORM_WIDTH:
-        case LV_STYLE_TRANSFORM_HEIGHT:
-        case LV_STYLE_TRANSLATE_X:
-        case LV_STYLE_TRANSLATE_Y:
-        case LV_STYLE_TRANSLATE_RADIAL:
-        case LV_STYLE_TRANSFORM_SCALE_X:
-        case LV_STYLE_TRANSFORM_SCALE_Y:
-        case LV_STYLE_TRANSFORM_ROTATION:
-        case LV_STYLE_TRANSFORM_PIVOT_X:
-        case LV_STYLE_TRANSFORM_PIVOT_Y:
-            return STYLE_PROP_TYPE_INT;
-
-        case LV_STYLE_ARC_OPA:
-        case LV_STYLE_OPA:
-        case LV_STYLE_OPA_LAYERED:
-        case LV_STYLE_BG_OPA:
-        case LV_STYLE_BG_IMAGE_OPA:
-        case LV_STYLE_BORDER_OPA:
-        case LV_STYLE_OUTLINE_OPA:
-        case LV_STYLE_SHADOW_OPA:
-        case LV_STYLE_TEXT_OPA:
-        case LV_STYLE_LINE_OPA:
-        case LV_STYLE_IMAGE_OPA:
-        case LV_STYLE_IMAGE_RECOLOR_OPA:
-        case LV_STYLE_RECOLOR_OPA:
-        case LV_STYLE_COLOR_FILTER_OPA:
-            return STYLE_PROP_TYPE_OPA;
-
-        case LV_STYLE_ARC_COLOR:
-        case LV_STYLE_BG_COLOR:
-        case LV_STYLE_BG_GRAD_COLOR:
-        case LV_STYLE_BORDER_COLOR:
-        case LV_STYLE_LINE_COLOR:
-        case LV_STYLE_OUTLINE_COLOR:
-        case LV_STYLE_SHADOW_COLOR:
-        case LV_STYLE_TEXT_COLOR:
-            return STYLE_PROP_TYPE_COLOR;
-
-        default:
-            return STYLE_PROP_TYPE_UNKNOWN;
-
-    }
-}
-
 static void anim_exec_cb(lv_anim_t * a, int32_t v)
 {
     anim_data_t * anim_data = lv_anim_get_user_data(a);
 
     lv_style_value_t style_value = {0};
-    if(anim_data->prop_type == STYLE_PROP_TYPE_INT || anim_data->prop_type == STYLE_PROP_TYPE_OPA) {
+    if(anim_data->prop_type == LV_XML_STYLE_PROP_ANIM_INT || anim_data->prop_type == LV_XML_STYLE_PROP_ANIM_OPA) {
         style_value.num = v;
     }
-    else if(anim_data->prop_type == STYLE_PROP_TYPE_COLOR) {
+    else if(anim_data->prop_type == LV_XML_STYLE_PROP_ANIM_COLOR) {
         style_value.color = lv_color_mix(anim_data->color_end, anim_data->color_start, v);
     }
 

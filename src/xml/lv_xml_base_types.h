@@ -207,6 +207,21 @@ bool lv_xml_style_selector_token_to_enum(const char * txt, lv_style_selector_t *
  */
 lv_style_selector_t lv_xml_style_selector_text_to_enum(const char * str);
 
+typedef enum {
+    LV_XML_STYLE_PROP_ANIM_INT,
+    LV_XML_STYLE_PROP_ANIM_OPA,
+    LV_XML_STYLE_PROP_ANIM_COLOR,
+    LV_XML_STYLE_PROP_ANIM_UNKNOWN
+} lv_xml_style_prop_anim_type_t;
+
+/**
+ * Classify how LVGL interpolates a style property during a transition.
+ * Properties LVGL cannot interpolate safely report _UNKNOWN: pointer-valued
+ * properties would have their low 32 bits blended into a pointer the draw pass
+ * follows, and colours outside lv_obj_style.c's mix block bleed channels.
+ */
+lv_xml_style_prop_anim_type_t lv_xml_style_prop_anim_type(lv_style_prop_t prop);
+
 /**********************
  *      MACROS
  **********************/

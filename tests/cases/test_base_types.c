@@ -1204,6 +1204,41 @@ static void test_style_selector_does_not_mutate_the_caller_string(void)
                                      "lv_xml_split_str writes NULs into its input");
 }
 
+/*===========================================================================
+ * lv_xml_style_prop_anim_type
+ *==========================================================================*/
+
+static void test_prop_anim_type_matches_what_lvgl_can_actually_interpolate(void)
+{
+    /* Numeric and opacity props ride LVGL's generic lerp. */
+    TEST_ASSERT_EQUAL_INT(LV_XML_STYLE_PROP_ANIM_INT,
+                          lv_xml_style_prop_anim_type(LV_STYLE_TRANSFORM_SCALE_X));
+    TEST_ASSERT_EQUAL_INT(LV_XML_STYLE_PROP_ANIM_OPA,
+                          lv_xml_style_prop_anim_type(LV_STYLE_TEXT_OPA));
+
+    /* LVGL mixes these through lv_color_mix(). */
+    TEST_ASSERT_EQUAL_INT(LV_XML_STYLE_PROP_ANIM_COLOR,
+                          lv_xml_style_prop_anim_type(LV_STYLE_BG_COLOR));
+    TEST_ASSERT_EQUAL_INT(LV_XML_STYLE_PROP_ANIM_COLOR,
+                          lv_xml_style_prop_anim_type(LV_STYLE_RECOLOR));
+    TEST_ASSERT_EQUAL_INT(LV_XML_STYLE_PROP_ANIM_COLOR,
+                          lv_xml_style_prop_anim_type(LV_STYLE_IMAGE_RECOLOR));
+
+    /* Absent from LVGL's colour-mix block: these bleed channels through .num,
+     * so the classifier must refuse them. */
+    TEST_ASSERT_EQUAL_INT(LV_XML_STYLE_PROP_ANIM_UNKNOWN,
+                          lv_xml_style_prop_anim_type(LV_STYLE_ARC_COLOR));
+    TEST_ASSERT_EQUAL_INT(LV_XML_STYLE_PROP_ANIM_UNKNOWN,
+                          lv_xml_style_prop_anim_type(LV_STYLE_LINE_COLOR));
+
+    /* Pointer-valued: blending the low 32 bits yields a pointer the draw pass
+     * will follow. */
+    TEST_ASSERT_EQUAL_INT(LV_XML_STYLE_PROP_ANIM_UNKNOWN,
+                          lv_xml_style_prop_anim_type(LV_STYLE_BG_IMAGE_SRC));
+    TEST_ASSERT_EQUAL_INT(LV_XML_STYLE_PROP_ANIM_UNKNOWN,
+                          lv_xml_style_prop_anim_type(LV_STYLE_TEXT_FONT));
+}
+
 /*---------------------------------------------------------------------------
  * main
  *--------------------------------------------------------------------------*/
@@ -1290,6 +1325,8 @@ int main(void)
     RUN_TEST(test_style_selector_does_not_warn_for_known_zero_valued_tokens);
     RUN_TEST(test_style_selector_longer_than_the_buffer_is_truncated_not_overread);
     RUN_TEST(test_style_selector_does_not_mutate_the_caller_string);
+
+    RUN_TEST(test_prop_anim_type_matches_what_lvgl_can_actually_interpolate);
 
     return UNITY_END();
 }

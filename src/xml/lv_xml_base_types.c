@@ -654,6 +654,89 @@ lv_style_selector_t lv_xml_style_selector_text_to_enum(const char * str)
 
     return selector;
 }
+
+lv_xml_style_prop_anim_type_t lv_xml_style_prop_anim_type(lv_style_prop_t prop)
+{
+    switch(prop) {
+        case LV_STYLE_WIDTH:
+        case LV_STYLE_MIN_WIDTH:
+        case LV_STYLE_MAX_WIDTH:
+        case LV_STYLE_HEIGHT:
+        case LV_STYLE_MIN_HEIGHT:
+        case LV_STYLE_MAX_HEIGHT:
+        case LV_STYLE_LENGTH:
+        case LV_STYLE_RADIUS:
+        case LV_STYLE_PAD_LEFT:
+        case LV_STYLE_PAD_RIGHT:
+        case LV_STYLE_PAD_TOP:
+        case LV_STYLE_PAD_BOTTOM:
+        case LV_STYLE_PAD_ROW:
+        case LV_STYLE_PAD_COLUMN:
+        case LV_STYLE_PAD_RADIAL:
+        case LV_STYLE_MARGIN_LEFT:
+        case LV_STYLE_MARGIN_RIGHT:
+        case LV_STYLE_MARGIN_TOP:
+        case LV_STYLE_MARGIN_BOTTOM:
+        case LV_STYLE_BG_MAIN_STOP:
+        case LV_STYLE_BG_GRAD_STOP:
+        case LV_STYLE_BG_IMAGE_RECOLOR_OPA:
+        case LV_STYLE_BORDER_WIDTH:
+        case LV_STYLE_OUTLINE_WIDTH:
+        case LV_STYLE_OUTLINE_PAD:
+        case LV_STYLE_SHADOW_WIDTH:
+        case LV_STYLE_SHADOW_OFFSET_X:
+        case LV_STYLE_SHADOW_OFFSET_Y:
+        case LV_STYLE_SHADOW_SPREAD:
+        case LV_STYLE_TEXT_LETTER_SPACE:
+        case LV_STYLE_TEXT_LINE_SPACE:
+        case LV_STYLE_LINE_WIDTH:
+        case LV_STYLE_LINE_DASH_WIDTH:
+        case LV_STYLE_LINE_DASH_GAP:
+        case LV_STYLE_ARC_WIDTH:
+        case LV_STYLE_TRANSFORM_WIDTH:
+        case LV_STYLE_TRANSFORM_HEIGHT:
+        case LV_STYLE_TRANSLATE_X:
+        case LV_STYLE_TRANSLATE_Y:
+        case LV_STYLE_TRANSLATE_RADIAL:
+        case LV_STYLE_TRANSFORM_SCALE_X:
+        case LV_STYLE_TRANSFORM_SCALE_Y:
+        case LV_STYLE_TRANSFORM_ROTATION:
+        case LV_STYLE_TRANSFORM_PIVOT_X:
+        case LV_STYLE_TRANSFORM_PIVOT_Y:
+            return LV_XML_STYLE_PROP_ANIM_INT;
+
+        case LV_STYLE_ARC_OPA:
+        case LV_STYLE_OPA:
+        case LV_STYLE_OPA_LAYERED:
+        case LV_STYLE_BG_OPA:
+        case LV_STYLE_BG_IMAGE_OPA:
+        case LV_STYLE_BORDER_OPA:
+        case LV_STYLE_OUTLINE_OPA:
+        case LV_STYLE_SHADOW_OPA:
+        case LV_STYLE_TEXT_OPA:
+        case LV_STYLE_LINE_OPA:
+        case LV_STYLE_IMAGE_OPA:
+        case LV_STYLE_IMAGE_RECOLOR_OPA:
+        case LV_STYLE_RECOLOR_OPA:
+        case LV_STYLE_COLOR_FILTER_OPA:
+            return LV_XML_STYLE_PROP_ANIM_OPA;
+
+        case LV_STYLE_BG_COLOR:
+        case LV_STYLE_BG_GRAD_COLOR:
+        case LV_STYLE_BORDER_COLOR:
+        case LV_STYLE_OUTLINE_COLOR:
+        case LV_STYLE_SHADOW_COLOR:
+        case LV_STYLE_TEXT_COLOR:
+        case LV_STYLE_RECOLOR:
+        case LV_STYLE_IMAGE_RECOLOR:
+            return LV_XML_STYLE_PROP_ANIM_COLOR;
+
+        default:
+            return LV_XML_STYLE_PROP_ANIM_UNKNOWN;
+
+    }
+}
+
 /**********************
  *   STATIC FUNCTIONS
  **********************/

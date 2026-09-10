@@ -84,6 +84,15 @@ void * lv_xml_obj_create(lv_xml_parser_state_t * state, const char ** attrs)
     return item;
 }
 
+typedef enum {
+    BITFIELD_CMP_EQ,
+    BITFIELD_CMP_GT,
+    BITFIELD_CMP_GE,
+} bitfield_cmp_t;
+
+static void bind_bitfield_cmp(lv_obj_t * obj, lv_subject_t * subject, lv_xml_bind_kind_t kind,
+                              uint32_t bits, int32_t ref_value, bitfield_cmp_t cmp, bool inv);
+
 void lv_xml_obj_apply(lv_xml_parser_state_t * state, const char ** attrs)
 {
     void * item = lv_xml_state_get_item(state);
@@ -208,6 +217,22 @@ void lv_xml_obj_apply(lv_xml_parser_state_t * state, const char ** attrs)
         else if(lv_streq("pressed", name))  lv_obj_set_state(item, LV_STATE_PRESSED, lv_xml_to_bool(value));
         else if(lv_streq("scrolled", name)) lv_obj_set_state(item, LV_STATE_SCROLLED, lv_xml_to_bool(value));
         else if(lv_streq("disabled", name)) lv_obj_set_state(item, LV_STATE_DISABLED, lv_xml_to_bool(value));
+
+        /* moves_machine: the guard a control that commands the toolhead gets BY
+         * CONSTRUCTION. The binding below is the same one the app's gate used
+         * to count by hand as
+         *   <bind_state_if_eq subject="job_holds_machine" state="disabled" ref_value="1"/>
+         * and composes with every other state binding on the object, so an
+         * element can carry it without knowing what else drives its state.
+         * The subject is app-registered; when it is absent the attribute is
+         * inert rather than fatal, same as a hand-written binding would be. */
+        else if(lv_streq("moves_machine", name) && lv_xml_to_bool(value)) {
+            lv_subject_t * subject = lv_xml_get_subject(&state->scope, "job_holds_machine");
+            if(subject) {
+                bind_bitfield_cmp(item, subject, LV_XML_BIND_STATE, LV_STATE_DISABLED, 1,
+                                  BITFIELD_CMP_EQ, false);
+            }
+        }
 
         else if(lv_streq("bind_checked", name)) {
             lv_subject_t * subject = lv_xml_get_subject(&state->scope, value);
@@ -771,12 +796,6 @@ void lv_obj_xml_bind_style_prop_apply(lv_xml_parser_state_t * state, const char 
 
 /* The comparison a `bind_(flag|state)_if_<suffix>` tag asks for. `not_eq`, `lt`
  * and `le` are the other three inverted, so three operators cover all six. */
-typedef enum {
-    BITFIELD_CMP_EQ,
-    BITFIELD_CMP_GT,
-    BITFIELD_CMP_GE,
-} bitfield_cmp_t;
-
 typedef struct {
     lv_xml_bind_target_t target;
     int32_t ref_value;

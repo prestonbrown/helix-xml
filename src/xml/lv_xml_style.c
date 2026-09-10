@@ -680,7 +680,12 @@ static void style_transition_install(lv_xml_style_t * xs, const char * props_str
     LV_ASSERT_MALLOC(dsc);
     if(dsc == NULL) { lv_free(arr); return; }
 
-    lv_style_transition_dsc_init(dsc, arr, path ? path : lv_anim_path_linear, time, delay, NULL);
+    /* Built at the scale in effect now, so a style registered while motion is
+     * scaled down is born scaled rather than waiting for the next
+     * lv_xml_set_transition_scale() call. trans_authored_time keeps the
+     * unscaled value so later calls retime from the same source. */
+    uint32_t scaled = (uint32_t)(((uint64_t)time * lv_xml_get_transition_scale()) >> 8);
+    lv_style_transition_dsc_init(dsc, arr, path ? path : lv_anim_path_linear, scaled, delay, NULL);
 
     /* The replacement is fully built - only now is it safe to let go of
      * whatever the style had before. */

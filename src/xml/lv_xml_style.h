@@ -81,6 +81,20 @@ lv_grad_dsc_t * lv_xml_component_get_grad(lv_xml_component_scope_t * scope, cons
  */
 void lv_xml_style_transition_clear(lv_xml_style_t * xs);
 
+/**
+ * Scale every declared transition duration. 256 runs them as authored, 0
+ * disables motion. Applies to descriptors already registered and to any
+ * registered afterwards.
+ * @param scale_256     the scale, as a fixed-point fraction of 256 (256 = 1.0)
+ */
+void lv_xml_set_transition_scale(uint32_t scale_256);
+
+/**
+ * Get the scale set by `lv_xml_set_transition_scale()`. 256 by default.
+ * @return              the current scale, as a fixed-point fraction of 256
+ */
+uint32_t lv_xml_get_transition_scale(void);
+
 /**********************
  *      MACROS
  **********************/

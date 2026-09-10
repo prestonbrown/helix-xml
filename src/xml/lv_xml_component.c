@@ -60,6 +60,7 @@ static void component_scope_drop_others(const char * name, const lv_xml_componen
 static void scope_instance_delete_cb(lv_event_t * e);
 static void scope_free_async_cb(void * scope_v);
 static void subject_expr_record_release(lv_xml_subject_expr_t * record);
+static void scope_retime_transitions(lv_ll_t * list);
 
 /**********************
  *  STATIC VARIABLES
@@ -78,6 +79,10 @@ static lv_ll_t pending_free_scope_ll;
 /** The `"globals"` scope: shared metadata, not a component, and never retired.
  *  Kept so the instance counting can skip it explicitly. */
 static lv_xml_component_scope_t * global_scope_p;
+
+/** Fixed-point fraction of 256 applied to every declared transition duration.
+ *  256 runs transitions as authored; 0 disables motion. */
+static uint32_t transition_scale = 256;
 
 /**********************
  *      MACROS
@@ -488,9 +493,40 @@ void lv_xml_component_deinit(void)
     global_scope_p = NULL;
 }
 
+uint32_t lv_xml_get_transition_scale(void)
+{
+    return transition_scale;
+}
+
+void lv_xml_set_transition_scale(uint32_t scale_256)
+{
+    transition_scale = scale_256;
+
+    /* A scope on `pending_free_scope_ll` is out of the lookup path but can
+     * still back widgets on screen through a borrowed style, so it needs the
+     * same retiming as a live scope. */
+    scope_retime_transitions(&component_scope_ll);
+    scope_retime_transitions(&pending_free_scope_ll);
+}
+
 /**********************
  *   STATIC FUNCTIONS
  **********************/
+
+/** Retime every style's transition in every scope on `list` from its authored
+ *  duration, so repeated calls at different scales never compound. */
+static void scope_retime_transitions(lv_ll_t * list)
+{
+    lv_xml_component_scope_t * scope;
+    LV_LL_READ(list, scope) {
+        lv_xml_style_t * style;
+        LV_LL_READ(&scope->style_ll, style) {
+            if(style->trans_dsc == NULL) continue;
+            style->trans_dsc->time =
+                (uint32_t)(((uint64_t)style->trans_authored_time * transition_scale) >> 8);
+        }
+    }
+}
 
 /** Unlink and free every scope registered under `name` except `keep`.
  *  The registry is a plain list with no uniqueness constraint, so this is what

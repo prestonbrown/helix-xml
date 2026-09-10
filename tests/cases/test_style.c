@@ -64,6 +64,13 @@ void setUp(void)
 void tearDown(void)
 {
     helix_test_env_teardown();
+
+    /* Unity runs tearDown() in its own TEST_PROTECT() frame even after a
+     * failing assertion aborts the test body via longjmp, so this is the one
+     * place a scale change is guaranteed to be undone regardless of where a
+     * test stopped. Without it, a test that changes the global scale and
+     * fails before restoring it leaks that scale into every test after. */
+    lv_xml_set_transition_scale(256);
 }
 
 /*---------------------------------------------------------------------------
@@ -1351,6 +1358,62 @@ static void test_clearing_a_transition_removes_the_property_and_is_idempotent(vo
     TEST_ASSERT_NULL(s->trans_dsc);
 }
 
+/*===========================================================================
+ * Global transition scale
+ *==========================================================================*/
+
+static void test_transition_scale_retimes_registered_descriptors_without_compounding(void)
+{
+    ASSERT_XML_REGISTERS("trans_scale",
+                         "<component>"
+                         "  <styles>"
+                         "    <style name=\"t\" transition=\"opa 200ms\"/>"
+                         "  </styles>"
+                         "  <view extends=\"lv_obj\" name=\"scale_root\"/>"
+                         "</component>");
+
+    lv_xml_component_scope_t * scope = lv_xml_component_get_scope("trans_scale");
+    lv_xml_style_t * s = lv_xml_get_style_by_name(scope, "t");
+    const lv_style_transition_dsc_t * d = style_prop_ptr(s, LV_STYLE_TRANSITION);
+    TEST_ASSERT_EQUAL_UINT32(200, d->time);
+
+    lv_xml_set_transition_scale(128);            /* half speed */
+    TEST_ASSERT_EQUAL_UINT32(100, d->time);
+
+    /* Scaling reads the authored value, so applying a second scale does not
+     * compound onto the first. */
+    lv_xml_set_transition_scale(64);
+    TEST_ASSERT_EQUAL_UINT32(50, d->time);
+
+    lv_xml_set_transition_scale(0);              /* motion off */
+    TEST_ASSERT_EQUAL_UINT32(0, d->time);
+
+    lv_xml_set_transition_scale(256);            /* restored */
+    TEST_ASSERT_EQUAL_UINT32(200, d->time);
+}
+
+static void test_a_style_registered_after_the_scale_is_set_is_born_scaled(void)
+{
+    lv_xml_set_transition_scale(0);
+
+    ASSERT_XML_REGISTERS("trans_late",
+                         "<component>"
+                         "  <styles>"
+                         "    <style name=\"t\" transition=\"opa 300ms\"/>"
+                         "  </styles>"
+                         "  <view extends=\"lv_obj\" name=\"late_root\"/>"
+                         "</component>");
+
+    lv_xml_component_scope_t * scope = lv_xml_component_get_scope("trans_late");
+    lv_xml_style_t * s = lv_xml_get_style_by_name(scope, "t");
+    const lv_style_transition_dsc_t * d = style_prop_ptr(s, LV_STYLE_TRANSITION);
+
+    TEST_ASSERT_EQUAL_UINT32(0, d->time);
+    TEST_ASSERT_EQUAL_UINT32(300, s->trans_authored_time);
+
+    lv_xml_set_transition_scale(256);
+}
+
 /*---------------------------------------------------------------------------
  * main
  *--------------------------------------------------------------------------*/
@@ -1404,6 +1467,9 @@ int main(void)
     RUN_TEST(test_shorthand_with_an_unrecognised_third_token_warns_and_is_refused);
 
     RUN_TEST(test_clearing_a_transition_removes_the_property_and_is_idempotent);
+
+    RUN_TEST(test_transition_scale_retimes_registered_descriptors_without_compounding);
+    RUN_TEST(test_a_style_registered_after_the_scale_is_set_is_born_scaled);
 
     return UNITY_END();
 }

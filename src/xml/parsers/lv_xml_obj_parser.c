@@ -226,11 +226,13 @@ void lv_xml_obj_apply(lv_xml_parser_state_t * state, const char ** attrs)
          * element can carry it without knowing what else drives its state.
          * The subject is app-registered; when it is absent the attribute is
          * inert rather than fatal, same as a hand-written binding would be. */
-        else if(lv_streq("moves_machine", name) && lv_xml_to_bool(value)) {
-            lv_subject_t * subject = lv_xml_get_subject(&state->scope, "job_holds_machine");
-            if(subject) {
-                bind_bitfield_cmp(item, subject, LV_XML_BIND_STATE, LV_STATE_DISABLED, 1,
-                                  BITFIELD_CMP_EQ, false);
+        else if(lv_streq("moves_machine", name)) {
+            if(lv_xml_to_bool(value)) {
+                lv_subject_t * subject = lv_xml_get_subject(&state->scope, "job_holds_machine");
+                if(subject) {
+                    bind_bitfield_cmp(item, subject, LV_XML_BIND_STATE, LV_STATE_DISABLED, 1,
+                                      BITFIELD_CMP_EQ, false);
+                }
             }
         }
 

@@ -111,6 +111,16 @@ static bool style_has_prop(const lv_xml_style_t * xs, lv_style_prop_t prop)
     return lv_style_get_prop((lv_style_t *)&xs->style, prop, &v) == LV_STYLE_RES_FOUND;
 }
 
+/** Read a pointer-valued property straight out of a registered lv_xml_style_t. */
+static const void * style_prop_ptr(const lv_xml_style_t * xs, lv_style_prop_t prop)
+{
+    lv_style_value_t v;
+    lv_style_res_t res = lv_style_get_prop((lv_style_t *)&xs->style, prop, &v);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(LV_STYLE_RES_FOUND, (int)res,
+                                  "the property is not present in the registered style at all");
+    return v.ptr;
+}
+
 /*---------------------------------------------------------------------------
  * Fixtures
  *
@@ -1027,6 +1037,108 @@ static void test_const_reference_in_a_style_property_resolves_and_reports_misses
 }
 
 /*---------------------------------------------------------------------------
+ * transition_props/transition_duration/transition_easing/transition_delay
+ *--------------------------------------------------------------------------*/
+
+static void test_longhand_transition_builds_a_descriptor_on_the_style(void)
+{
+    ASSERT_XML_REGISTERS("trans_long",
+                         "<component>"
+                         "  <styles>"
+                         "    <style name=\"t\" transition_props=\"opa|transform_scale_x\""
+                         "           transition_duration=\"180\" transition_easing=\"ease_out\""
+                         "           transition_delay=\"20\"/>"
+                         "  </styles>"
+                         "  <view extends=\"lv_obj\" name=\"long_root\"/>"
+                         "</component>");
+
+    lv_xml_component_scope_t * scope = lv_xml_component_get_scope("trans_long");
+    lv_xml_style_t * s = lv_xml_get_style_by_name(scope, "t");
+    TEST_ASSERT_NOT_NULL(s);
+
+    const lv_style_transition_dsc_t * d = style_prop_ptr(s, LV_STYLE_TRANSITION);
+    TEST_ASSERT_EQUAL_PTR(s->trans_dsc, d);
+    TEST_ASSERT_EQUAL_UINT32(180, d->time);
+    TEST_ASSERT_EQUAL_UINT32(20, d->delay);
+    TEST_ASSERT_EQUAL_PTR(lv_anim_path_ease_out, d->path_xcb);
+
+    TEST_ASSERT_EQUAL_INT(LV_STYLE_OPA, d->props[0]);
+    TEST_ASSERT_EQUAL_INT(LV_STYLE_TRANSFORM_SCALE_X, d->props[1]);
+    TEST_ASSERT_EQUAL_INT(0, d->props[2]);   /* NULL terminator LVGL scans for */
+}
+
+static void test_a_non_interpolatable_transition_prop_is_rejected_by_name(void)
+{
+    log_capture_start();
+    ASSERT_XML_REGISTERS("trans_bad",
+                         "<component>"
+                         "  <styles>"
+                         "    <style name=\"t\" transition_props=\"opa|bg_image_src\""
+                         "           transition_duration=\"100\"/>"
+                         "  </styles>"
+                         "  <view extends=\"lv_obj\" name=\"bad_root\"/>"
+                         "</component>");
+    log_capture_stop();
+
+    TEST_ASSERT_TRUE(log_contains("bg_image_src"));
+
+    /* The whole transition is refused, not silently trimmed to the good half:
+     * a partially applied transition would be a surprise at the call site. */
+    lv_xml_component_scope_t * scope = lv_xml_component_get_scope("trans_bad");
+    lv_xml_style_t * s = lv_xml_get_style_by_name(scope, "t");
+    TEST_ASSERT_NOT_NULL(s);
+    TEST_ASSERT_NULL(s->trans_dsc);
+    TEST_ASSERT_FALSE(style_has_prop(s, LV_STYLE_TRANSITION));
+}
+
+static void test_re_registering_a_style_replaces_its_transition(void)
+{
+    ASSERT_XML_REGISTERS("trans_twice",
+                         "<component>"
+                         "  <styles>"
+                         "    <style name=\"t\" transition_props=\"opa\" transition_duration=\"100\"/>"
+                         "    <style name=\"t\" transition_props=\"opa\" transition_duration=\"250\"/>"
+                         "  </styles>"
+                         "  <view extends=\"lv_obj\" name=\"twice_root\"/>"
+                         "</component>");
+
+    lv_xml_component_scope_t * scope = lv_xml_component_get_scope("trans_twice");
+    lv_xml_style_t * s = lv_xml_get_style_by_name(scope, "t");
+    TEST_ASSERT_NOT_NULL(s);
+
+    const lv_style_transition_dsc_t * d = style_prop_ptr(s, LV_STYLE_TRANSITION);
+    TEST_ASSERT_EQUAL_PTR(s->trans_dsc, d);
+    TEST_ASSERT_EQUAL_UINT32(250, d->time);
+}
+
+static void test_clearing_a_transition_removes_the_property_and_is_idempotent(void)
+{
+    ASSERT_XML_REGISTERS("trans_clear",
+                         "<component>"
+                         "  <styles>"
+                         "    <style name=\"t\" transition_props=\"opa\" transition_duration=\"120\"/>"
+                         "  </styles>"
+                         "  <view extends=\"lv_obj\" name=\"clear_root\"/>"
+                         "</component>");
+
+    lv_xml_component_scope_t * scope = lv_xml_component_get_scope("trans_clear");
+    TEST_ASSERT_NOT_NULL(scope);
+    lv_xml_style_t * s = lv_xml_get_style_by_name(scope, "t");
+    TEST_ASSERT_NOT_NULL(s);
+    TEST_ASSERT_NOT_NULL(s->trans_dsc);
+    TEST_ASSERT_TRUE(style_has_prop(s, LV_STYLE_TRANSITION));
+
+    lv_xml_style_transition_clear(s);
+    TEST_ASSERT_NULL(s->trans_dsc);
+    TEST_ASSERT_NULL(s->trans_props);
+    TEST_ASSERT_FALSE(style_has_prop(s, LV_STYLE_TRANSITION));
+
+    /* A second clear must not double free. */
+    lv_xml_style_transition_clear(s);
+    TEST_ASSERT_NULL(s->trans_dsc);
+}
+
+/*---------------------------------------------------------------------------
  * main
  *--------------------------------------------------------------------------*/
 
@@ -1064,6 +1176,11 @@ int main(void)
     RUN_TEST(test_unsupported_style_property_warns_and_the_rest_of_the_style_survives);
     RUN_TEST(test_remove_value_deletes_the_property_from_the_style);
     RUN_TEST(test_const_reference_in_a_style_property_resolves_and_reports_misses);
+
+    RUN_TEST(test_longhand_transition_builds_a_descriptor_on_the_style);
+    RUN_TEST(test_a_non_interpolatable_transition_prop_is_rejected_by_name);
+    RUN_TEST(test_re_registering_a_style_replaces_its_transition);
+    RUN_TEST(test_clearing_a_transition_removes_the_property_and_is_idempotent);
 
     return UNITY_END();
 }

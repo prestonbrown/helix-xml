@@ -34,6 +34,12 @@
  *  STATIC PROTOTYPES
  **********************/
 
+static lv_anim_path_cb_t transition_easing_to_cb(const char * txt);
+static uint32_t transition_time_to_ms(const char * txt);
+static void style_transition_install(lv_xml_style_t * xs, const char * props_str,
+                                     uint32_t time, uint32_t delay, lv_anim_path_cb_t path,
+                                     const char * style_name);
+
 /**********************
  *  STATIC VARIABLES
  **********************/
@@ -88,6 +94,17 @@ lv_result_t lv_xml_register_style(lv_xml_component_scope_t * scope, const char *
     }
 
     lv_style_t * style = &xml_style->style;
+
+    /* The transition descriptor cannot be built until all four longhand
+     * attributes are known, so the loop below collects them here instead of
+     * applying each inline, and the descriptor is built once after the loop. */
+    struct {
+        const char * props_str;
+        uint32_t duration;
+        uint32_t delay;
+        lv_anim_path_cb_t easing;
+        bool seen;
+    } trans = { NULL, 0, 0, NULL, false };
 
     int32_t i;
     for(i = 0; attrs[i]; i += 2) {
@@ -335,9 +352,31 @@ lv_result_t lv_xml_register_style(lv_xml_component_scope_t * scope, const char *
             }
         }
 
+        else if(lv_streq(name, "transition_props")) {
+            trans.props_str = value;
+            trans.seen = true;
+        }
+        else if(lv_streq(name, "transition_duration")) {
+            trans.duration = transition_time_to_ms(value);
+            trans.seen = true;
+        }
+        else if(lv_streq(name, "transition_easing")) {
+            trans.easing = transition_easing_to_cb(value);
+            trans.seen = true;
+        }
+        else if(lv_streq(name, "transition_delay")) {
+            trans.delay = transition_time_to_ms(value);
+            trans.seen = true;
+        }
+
         else {
             LV_LOG_WARN("%s style property is not supported", name);
         }
+    }
+
+    if(trans.seen) {
+        style_transition_install(xml_style, trans.props_str, trans.duration, trans.delay,
+                                 trans.easing, style_name);
     }
 
     return LV_RESULT_OK;
@@ -459,5 +498,85 @@ void lv_xml_style_transition_clear(lv_xml_style_t * xs)
 /**********************
  *   STATIC FUNCTIONS
  **********************/
+
+static lv_anim_path_cb_t transition_easing_to_cb(const char * txt)
+{
+    if(lv_streq(txt, "linear"))      return lv_anim_path_linear;
+    if(lv_streq(txt, "ease_in"))     return lv_anim_path_ease_in;
+    if(lv_streq(txt, "ease_out"))    return lv_anim_path_ease_out;
+    if(lv_streq(txt, "ease_in_out")) return lv_anim_path_ease_in_out;
+    if(lv_streq(txt, "overshoot"))   return lv_anim_path_overshoot;
+    if(lv_streq(txt, "bounce"))      return lv_anim_path_bounce;
+    if(lv_streq(txt, "step"))        return lv_anim_path_step;
+    return NULL;
+}
+
+/* lv_xml_atoi() stops at the 'm' of "200ms", so a `ms`-suffixed duration or
+ * delay parses to the same value as its bare numeral. */
+static uint32_t transition_time_to_ms(const char * txt)
+{
+    return (uint32_t)lv_xml_atoi(txt);
+}
+
+/**
+ * Build the transition descriptor for a style from its longhand attributes
+ * and install it, replacing whatever transition the style already owns.
+ * @param xs            the style to install onto
+ * @param props_str     `|`-separated style property names, or NULL for none
+ * @param time          transition duration in ms
+ * @param delay         transition delay in ms
+ * @param path          easing callback, or NULL for linear
+ * @param style_name    the style's name, for warning messages
+ */
+static void style_transition_install(lv_xml_style_t * xs, const char * props_str,
+                                     uint32_t time, uint32_t delay, lv_anim_path_cb_t path,
+                                     const char * style_name)
+{
+    lv_xml_style_transition_clear(xs);
+    if(props_str == NULL) return;
+
+    char buf[256];
+    lv_strncpy(buf, props_str, sizeof(buf));
+    buf[sizeof(buf) - 1] = '\0';
+
+    /* Count first so the array is allocated once, then fill. */
+    uint32_t cnt = 1;
+    for(const char * p = buf; *p; p++) if(*p == '|') cnt++;
+
+    lv_style_prop_t * arr = lv_malloc((cnt + 1) * sizeof(lv_style_prop_t));
+    LV_ASSERT_MALLOC(arr);
+    if(arr == NULL) return;
+
+    uint32_t n = 0;
+    char * bufp = buf;
+    const char * tok = lv_xml_split_str(&bufp, '|');
+    while(tok) {
+        lv_style_prop_t prop = lv_xml_style_prop_to_enum(tok);
+        if(prop == LV_STYLE_PROP_INV) {
+            LV_LOG_WARN("`%s` is not a style property, in transition of style `%s`", tok, style_name);
+            lv_free(arr);
+            return;
+        }
+        if(lv_xml_style_prop_anim_type(prop) == LV_XML_STYLE_PROP_ANIM_UNKNOWN) {
+            LV_LOG_WARN("`%s` cannot be interpolated, in transition of style `%s`", tok, style_name);
+            lv_free(arr);
+            return;
+        }
+        arr[n++] = prop;
+        tok = lv_xml_split_str(&bufp, '|');
+    }
+    arr[n] = 0;
+
+    lv_style_transition_dsc_t * dsc = lv_malloc(sizeof(*dsc));
+    LV_ASSERT_MALLOC(dsc);
+    if(dsc == NULL) { lv_free(arr); return; }
+
+    lv_style_transition_dsc_init(dsc, arr, path ? path : lv_anim_path_linear, time, delay, NULL);
+
+    xs->trans_dsc = dsc;
+    xs->trans_props = arr;
+    xs->trans_authored_time = time;
+    lv_style_set_transition(&xs->style, dsc);
+}
 
 #endif /* LV_USE_XML */

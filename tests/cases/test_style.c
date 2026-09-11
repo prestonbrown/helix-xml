@@ -114,6 +114,10 @@ static int32_t style_prop_num(const lv_xml_style_t * xs, lv_style_prop_t prop)
 
 static bool style_has_prop(const lv_xml_style_t * xs, lv_style_prop_t prop)
 {
+    /* A style holding no properties has none to find. Asking LVGL anyway
+     * offsets its NULL property array by zero, which UBSan rejects. */
+    if(xs->style.prop_cnt == 0) return false;
+
     lv_style_value_t v;
     return lv_style_get_prop((lv_style_t *)&xs->style, prop, &v) == LV_STYLE_RES_FOUND;
 }

@@ -989,6 +989,13 @@ void lv_obj_xml_bind_flag_if_apply(lv_xml_parser_state_t * state, const char ** 
         LV_LOG_WARN("`cond` is missing in bind_flag_if");
         return;
     }
+    else if(cond[0] == '\0') {
+        /* Empty cond = intentional "no binding" (an optional cond left at its
+         * empty default). Skip silently so the binding never installs and
+         * clobbers a static flag such as hidden="true" - the same contract the
+         * empty-subject path of bind_flag_apply gives the subject form. */
+        return;
+    }
     if(flag_str == NULL) {
         LV_LOG_WARN("`flag` is missing in bind_flag_if");
         return;

@@ -14,6 +14,7 @@
 
 #include <lvgl.h>
 #include "lv_xml_component_private.h"
+#include <lvgl_private.h>
 #include "lv_xml_private.h"
 #include "lv_xml_parser.h"
 #include "lv_xml_style.h"
@@ -55,6 +56,7 @@ static void process_subject_expr_element(lv_xml_parser_state_t * state, const ch
 static char * extract_view_content(const char * xml_definition);
 static void anim_exec_cb(lv_anim_t * a, int32_t v);
 static void component_scope_retire(lv_xml_component_scope_t * scope);
+static bool scope_styles_are_live(lv_xml_component_scope_t * scope);
 static void component_scope_free(lv_xml_component_scope_t * scope);
 static void component_scope_drop_others(const char * name, const lv_xml_component_scope_t * keep);
 static void scope_instance_delete_cb(lv_event_t * e);
@@ -575,7 +577,11 @@ static void component_scope_retire(lv_xml_component_scope_t * scope)
      * style_ll - the count never sees those, and for a styles-only library it is
      * permanently zero, so freeing on the count alone handed a dangling style to
      * every borrower. */
-    if(scope->instance_cnt == 0 && !scope->styles_borrowed) {
+    /* Neither counter sees an object that outlived its view root - one reparented
+     * onto a layer, or an overlay scrim left standing. `scope_styles_are_live()`
+     * asks the object tree directly instead of predicting from a count, so a
+     * scope whose styles are still referenced is deferred rather than freed. */
+    if(scope->instance_cnt == 0 && !scope->styles_borrowed && !scope_styles_are_live(scope)) {
         lv_ll_remove(&component_scope_ll, scope);
         component_scope_free(scope);
         return;
@@ -642,6 +648,44 @@ static void scope_free_async_cb(void * scope_v)
  *  live-instance gate is in component_scope_retire(), and this is also the FORCE
  *  path lv_xml_component_deinit() takes. The caller must have already unlinked it
  *  from whichever list held it. */
+
+/* Does any live object still hold a raw pointer into this scope's style_ll? */
+static bool obj_holds_scope_style(lv_obj_t * obj, lv_xml_component_scope_t * scope)
+{
+    if(obj == NULL) return false;
+    for(uint32_t i = 0; i < obj->style_cnt; i++) {
+        lv_xml_style_t * xs;
+        LV_LL_READ(&scope->style_ll, xs) {
+            if(obj->styles[i].style == &xs->style) return true;
+        }
+    }
+    uint32_t n = lv_obj_get_child_count(obj);
+    for(uint32_t c = 0; c < n; c++) {
+        if(obj_holds_scope_style(lv_obj_get_child(obj, c), scope)) return true;
+    }
+    return false;
+}
+
+static bool scope_styles_are_live(lv_xml_component_scope_t * scope)
+{
+    if(lv_ll_get_head(&scope->style_ll) == NULL) return false;   /* no styles to dangle */
+    lv_display_t * d = lv_display_get_next(NULL);
+    while(d != NULL) {
+        /* Every root an object can be reachable from: the loaded screen, and the
+         * three layers, which outlive a screen change and are where a deferred
+         * delete parks its subject. */
+        lv_obj_t * roots[4] = { lv_display_get_screen_active(d),
+                                lv_display_get_layer_top(d),
+                                lv_display_get_layer_sys(d),
+                                lv_display_get_layer_bottom(d) };
+        for(int r = 0; r < 4; r++) {
+            if(obj_holds_scope_style(roots[r], scope)) return true;
+        }
+        d = lv_display_get_next(d);
+    }
+    return false;
+}
+
 static void component_scope_free(lv_xml_component_scope_t * scope)
 {
     /* Instances that outlive their scope: only reachable from the forced

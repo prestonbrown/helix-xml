@@ -196,8 +196,42 @@ lv_obj_t * lv_xml_component_process(lv_xml_parser_state_t * state, const char * 
 
     /* Apply the properties of the component, e.g. <my_button x="20" width="300"/> */
     state->item = item;
+
+    /* An instance-site attribute the component declares in <api> is its
+     * public interface, consumed by $param substitution inside the view.
+     * Letting it fall through to the root widget's native attributes as well
+     * gives it a second meaning whenever the names collide: `disabled="<subject>"`
+     * names a subject to the component but reads as a boolean to the widget,
+     * leaving the instance permanently disabled whatever the subject says.
+     * Strip <api> names; every other attribute passes through unchanged. */
+    uint32_t attr_count = 0;
+    while(attrs[attr_count] != NULL) attr_count++;
+    const char ** apply_attrs = lv_malloc(sizeof(const char *) * (attr_count + 1));
+    if(apply_attrs == NULL) {
+        LV_LOG_WARN("OOM filtering component attrs; applying unfiltered");
+        lv_widget_processor_t * proc = lv_xml_widget_get_extended_widget_processor(scope->extends);
+        proc->apply_cb(state, attrs);
+        return item;
+    }
+    uint32_t keep = 0;
+    for(uint32_t i = 0; i < attr_count; i += 2) {
+        bool is_api_name = false;
+        lv_xml_param_t * prop;
+        LV_LL_READ(&scope->param_ll, prop) {
+            if(lv_streq(prop->name, attrs[i])) {
+                is_api_name = true;
+                break;
+            }
+        }
+        if(!is_api_name) {
+            apply_attrs[keep++] = attrs[i];
+            apply_attrs[keep++] = attrs[i + 1];
+        }
+    }
+    apply_attrs[keep] = NULL;
     lv_widget_processor_t * extended_proc = lv_xml_widget_get_extended_widget_processor(scope->extends);
-    extended_proc->apply_cb(state, attrs);
+    extended_proc->apply_cb(state, apply_attrs);
+    lv_free(apply_attrs);
 
 #if LV_USE_OBJ_NAME
     /*Set a default indexed name.

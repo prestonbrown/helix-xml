@@ -770,6 +770,69 @@ static void test_inline_style_attribute_outranks_a_bound_style(void)
 }
 
 /*===========================================================================
+ * Empty-subject bindings
+ *==========================================================================*/
+
+/*
+ * A host application may register a subject under the EMPTY name - HelixScreen
+ * registers an int-0 one so an optional subject prop left at its "" default
+ * resolves silently instead of warning on every widget that declares it. That
+ * makes "" a RESOLVABLE subject name: a style binding whose subject attribute
+ * is empty resolves that subject, matches ref_value 0, and installs an ENABLED
+ * style - which, added after the static <style>, is looked up first and
+ * clobbers it. An empty subject means "no binding"; both <bind_style> forms
+ * must skip it.
+ */
+
+/* File-static on purpose: it must survive the lv_deinit() at the end of the
+ * previous test, and lv_subject_init_int() drops any stale observer list
+ * before this test's cycle uses it. */
+static lv_subject_t s_empty_name_subject;
+
+static void empty_name_subject_register(void)
+{
+    lv_subject_init_int(&s_empty_name_subject, 0);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        LV_RESULT_OK,
+        (int)lv_xml_register_subject(NULL, "", &s_empty_name_subject),
+        "could not register the int-0 subject under the empty name");
+}
+
+static const char * STYLE_EMPTY_SUBJECT_XML =
+    "<component>"
+    "  <styles>"
+    "    <style name=\"stat\" radius=\"9\"/>"
+    "    <style name=\"loud\" radius=\"41\"/>"
+    "  </styles>"
+    "  <view extends=\"lv_obj\" name=\"empty_subject_root\">"
+    "    <lv_obj name=\"via_bind\">"
+    "      <style name=\"stat\"/>"
+    "      <bind_style name=\"loud\" subject=\"\" ref_value=\"0\"/>"
+    "    </lv_obj>"
+    "    <lv_obj name=\"via_eq\">"
+    "      <style name=\"stat\"/>"
+    "      <bind_style_if_eq name=\"loud\" subject=\"\" ref_value=\"0\"/>"
+    "    </lv_obj>"
+    "  </view>"
+    "</component>";
+
+static void test_an_empty_subject_style_binding_installs_nothing(void)
+{
+    empty_name_subject_register();
+    ASSERT_XML_REGISTERS("style_empty_subject", STYLE_EMPTY_SUBJECT_XML);
+
+    lv_obj_t * root = XML_CREATE(helix_test_env_screen(), "style_empty_subject", NULL);
+    helix_test_pump(30);
+
+    /* The static style's radius must survive on both objects. The empty-named
+     * subject holds 0 and ref_value is 0, so a binding that resolved it would
+     * be live at create time - and its style, added after the static one, is
+     * found first by the lookup, with radius 41. */
+    ASSERT_STYLE_INT(ASSERT_NAMED(root, "via_bind"), LV_STYLE_RADIUS, LV_PART_MAIN, 9);
+    ASSERT_STYLE_INT(ASSERT_NAMED(root, "via_eq"), LV_STYLE_RADIUS, LV_PART_MAIN, 9);
+}
+
+/*===========================================================================
  * Gradients
  *==========================================================================*/
 
@@ -1696,6 +1759,8 @@ int main(void)
 
     RUN_TEST(test_inline_style_attribute_outranks_a_style_element);
     RUN_TEST(test_inline_style_attribute_outranks_a_bound_style);
+
+    RUN_TEST(test_an_empty_subject_style_binding_installs_nothing);
 
     RUN_TEST(test_gradient_declared_in_a_component_scope_is_resolvable_by_name);
     RUN_TEST(test_gradient_reference_reaches_the_widget_from_a_style_and_from_an_attribute);

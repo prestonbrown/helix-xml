@@ -456,6 +456,70 @@ static void test_two_flag_binds_for_one_flag_or_together(void)
     ASSERT_NO_FLAG(box, LV_OBJ_FLAG_HIDDEN);
 }
 
+/*---------------------------------------------------------------------------
+ * Empty-subject bindings
+ *--------------------------------------------------------------------------*/
+
+/*
+ * A host application may register a subject under the EMPTY name - HelixScreen
+ * registers an int-0 one so an optional subject prop left at its "" default
+ * resolves silently instead of warning on every widget that declares it. That
+ * makes "" a RESOLVABLE subject name: a bind_flag_if_eq / bind_state_if_eq
+ * whose subject attribute is empty resolves that subject, matches ref_value 0,
+ * and applies a flag or state the markup never asked for. An empty subject
+ * means "no binding"; both appliers must skip it.
+ */
+
+/* File-static on purpose: it must survive the lv_deinit() at the end of the
+ * previous test, and lv_subject_init_int() drops any stale observer list
+ * before this test's cycle uses it. */
+static lv_subject_t s_empty_name_subject;
+
+static void empty_name_subject_register(void)
+{
+    lv_subject_init_int(&s_empty_name_subject, 0);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        LV_RESULT_OK,
+        (int)lv_xml_register_subject(NULL, "", &s_empty_name_subject),
+        "could not register the int-0 subject under the empty name");
+}
+
+static const char * EMPTY_SUBJECT_XML =
+    "<component>"
+    "  <view extends=\"lv_obj\" name=\"empty_subject_root\">"
+    "    <lv_obj name=\"flag_box\">"
+    "      <bind_flag_if_eq subject=\"\" flag=\"hidden\" ref_value=\"0\"/>"
+    "    </lv_obj>"
+    "    <lv_obj name=\"state_box\">"
+    "      <bind_state_if_eq subject=\"\" state=\"checked\" ref_value=\"0\"/>"
+    "    </lv_obj>"
+    "  </view>"
+    "</component>";
+
+static void test_an_empty_subject_flag_bind_applies_no_flag(void)
+{
+    empty_name_subject_register();
+    ASSERT_XML_REGISTERS("cb_empty_subject", EMPTY_SUBJECT_XML);
+
+    lv_obj_t * root = XML_CREATE(helix_test_env_screen(), "cb_empty_subject", NULL);
+    helix_test_pump(30);
+
+    /* The empty-named subject holds 0 and ref_value is 0, so an eq binding
+     * that resolved it would match at create time and ADD the flag. */
+    ASSERT_NO_FLAG(ASSERT_NAMED(root, "flag_box"), LV_OBJ_FLAG_HIDDEN);
+}
+
+static void test_an_empty_subject_state_bind_applies_no_state(void)
+{
+    empty_name_subject_register();
+    ASSERT_XML_REGISTERS("cb_empty_subject", EMPTY_SUBJECT_XML);
+
+    lv_obj_t * root = XML_CREATE(helix_test_env_screen(), "cb_empty_subject", NULL);
+    helix_test_pump(30);
+
+    ASSERT_NO_STATE(ASSERT_NAMED(root, "state_box"), LV_STATE_CHECKED);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -471,6 +535,9 @@ int main(void)
 
     RUN_TEST(test_a_non_matching_flag_bind_removes_the_flag_rather_than_abstaining);
     RUN_TEST(test_two_flag_binds_for_one_flag_or_together);
+
+    RUN_TEST(test_an_empty_subject_flag_bind_applies_no_flag);
+    RUN_TEST(test_an_empty_subject_state_bind_applies_no_state);
 
     return UNITY_END();
 }

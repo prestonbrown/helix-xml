@@ -1311,6 +1311,7 @@ static void view_character_data_handler(void * user_data, const XML_Char * s, in
      *elements it belongs to. The chardata handler receives a length, not a NUL-
      *terminated string, so make a bounded copy for the event.*/
     xml_frag_capture_t * cap = (xml_frag_capture_t *)state->context;
+    if(cap && cap->active && !cap->replaying && cap->skip_nested > 0) return;
     if(cap && cap->active && !cap->replaying) {
         char * text = lv_malloc((size_t)len + 1);
         if(text) {
@@ -2199,6 +2200,23 @@ static void view_start_element_handler(void * user_data, const char * name, cons
 
     xml_frag_capture_t * cap = (xml_frag_capture_t *)state->context;
 
+    /*A <repeat> or <if> opened inside a body being captured is not supported:
+     *taking it would replace the outer capture and unbalance the parse. Skip it
+     *and everything inside it, keeping the outer capture intact.*/
+    if(cap && cap->active && !cap->replaying) {
+        bool fragment = lv_streq(name, "repeat") || lv_streq(name, "if");
+        if(cap->skip_nested > 0) {
+            if(fragment) cap->skip_nested++;
+            return;
+        }
+        if(fragment) {
+            LV_LOG_ERROR("<%s> nested inside <%s> in '%s' is not supported; skipping it", name,
+                         cap->is_if ? "if" : "repeat", state->scope.name ? state->scope.name : "?");
+            cap->skip_nested = 1;
+            return;
+        }
+    }
+
     /*Enter capture on <repeat>. Must run before the pcdata push below: <repeat>
      *creates no object and pushes no stack node, so it owns no pcdata entry.
      *A capture is ALWAYS allocated (even on missing/unparseable count) so the
@@ -2408,6 +2426,10 @@ static void view_end_element_handler(void * user_data, const char * name)
     lv_xml_parser_state_t * state = (lv_xml_parser_state_t *)user_data;
 
     xml_frag_capture_t * cap = (xml_frag_capture_t *)state->context;
+    if(cap && cap->active && !cap->replaying && cap->skip_nested > 0) {
+        if(lv_streq(name, "repeat") || lv_streq(name, "if")) cap->skip_nested--;
+        return;
+    }
     if(cap && cap->active && !cap->replaying) {
         uint32_t depth = (uint32_t)lv_ll_get_len(&state->parent_ll);
         if(lv_streq(name, "repeat") && depth == cap->base_depth) {

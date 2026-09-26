@@ -102,6 +102,7 @@ typedef struct {
     uint32_t else_split;
     bool     has_else;
     bool     is_if;              /* distinguishes an <if> capture from a <repeat> capture */
+    uint32_t skip_nested;        /* >0 while swallowing an unsupported nested <repeat>/<if> */
     char *   cond_raw;           /* <if> cond attr (owned); NULL for <repeat> */
 } xml_frag_capture_t;
 

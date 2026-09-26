@@ -597,6 +597,12 @@ void lv_obj_xml_bind_style_apply(lv_xml_parser_state_t * state, const char ** at
         LV_LOG_WARN("`subject` is missing in lv_obj bind_style");
         return;
     }
+    else if(subject_str[0] == '\0') {
+        /* Empty subject = intentional "no binding" (an optional subject left at
+         * its empty default). Skip silently so the binding never installs and
+         * clobbers a static style. */
+        return;
+    }
 
     lv_subject_t * subject = lv_xml_get_subject(&state->scope, subject_str);
     if(subject == NULL) {
@@ -712,7 +718,12 @@ void lv_obj_xml_bind_style_cmp_apply(lv_xml_parser_state_t * state, const char *
         LV_LOG_WARN("`subject` is missing in bind_style_if_*");
         return;
     }
-
+    else if(subject_str[0] == '\0') {
+        /* Empty subject = intentional "no binding" (an optional subject left at
+         * its empty default). Skip silently so the binding never installs and
+         * clobbers a static style. */
+        return;
+    }
     lv_subject_t * subject = lv_xml_get_subject(&state->scope, subject_str);
     if(subject == NULL) {
         LV_LOG_WARN("Subject `%s` doesn't exist in bind_style_if_*", subject_str);

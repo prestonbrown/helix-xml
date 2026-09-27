@@ -219,16 +219,17 @@ void lv_xml_obj_apply(lv_xml_parser_state_t * state, const char ** attrs)
         else if(lv_streq("disabled", name)) lv_obj_set_state(item, LV_STATE_DISABLED, lv_xml_to_bool(value));
 
         /* moves_machine: the guard a control that commands the toolhead gets BY
-         * CONSTRUCTION. The binding below is the same one the app's gate used
-         * to count by hand as
-         *   <bind_state_if_eq subject="job_holds_machine" state="disabled" ref_value="1"/>
+         * CONSTRUCTION. It is the binding
+         *   <bind_state_if_eq subject="machine_motion_blocked" state="disabled" ref_value="1"/>
          * and composes with every other state binding on the object, so an
          * element can carry it without knowing what else drives its state.
+         * machine_motion_blocked is 1 while anything forbids moving the toolhead:
+         * a job holding the machine, or spools lying on the bed.
          * The subject is app-registered; when it is absent the attribute is
          * inert rather than fatal, same as a hand-written binding would be. */
         else if(lv_streq("moves_machine", name)) {
             if(lv_xml_to_bool(value)) {
-                lv_subject_t * subject = lv_xml_get_subject(&state->scope, "job_holds_machine");
+                lv_subject_t * subject = lv_xml_get_subject(&state->scope, "machine_motion_blocked");
                 if(subject) {
                     bind_bitfield_cmp(item, subject, LV_XML_BIND_STATE, LV_STATE_DISABLED, 1,
                                       BITFIELD_CMP_EQ, false);

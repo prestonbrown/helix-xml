@@ -139,28 +139,10 @@ lv_result_t lv_xml_register_style(lv_xml_component_scope_t * scope, const char *
 
         if(value[0] == '#') {
             const char * value_clean = &value[1];
-            bool const_found = false;
-            lv_xml_const_t * c;
-            LV_LL_READ(&scope->const_ll, c) {
-                if(lv_streq(c->name, value_clean)) {
-                    value = c->value;
-                    const_found = true;
-                    break;
-                }
-            }
-            if(!const_found) {
-                lv_xml_component_scope_t * global_scope = lv_xml_component_get_scope("globals");
-                if(global_scope) {
-                    LV_LL_READ(&global_scope->const_ll, c) {
-                        if(lv_streq(c->name, value_clean)) {
-                            value = c->value;
-                            const_found = true;
-                            break;
-                        }
-                    }
-                }
-            }
-            if(!const_found) {
+            /* The component's consts first, then globals (indexed). */
+            const char * const_value = lv_xml_get_const_silent(scope, value_clean);
+            if(const_value) value = const_value;
+            if(!const_value) {
                 LV_LOG_WARN("Unknown const `#%s` in style of component `%s` (property `%s`) - "
                             "property skipped",
                             value_clean,

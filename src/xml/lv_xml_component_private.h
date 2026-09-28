@@ -31,6 +31,25 @@ extern "C" {
 
 typedef  void * (*lv_xml_component_process_cb_t)(lv_obj_t * parent, const char * data, const char ** attrs);
 
+/**
+ * Open-addressed name -> record index over a scope list whose records start
+ * with `const char * name` (lv_xml_const_t, lv_xml_subject_t). Only the globals
+ * scope keeps one: its lists hold hundreds of entries, and a linear walk
+ * through them (PSRAM on the ESP32) dominated every lookup and registration.
+ * Every insert, remove and clear of an indexed list must go through the
+ * matching lv_xml_name_index_* call, or the index keeps a dangling record.
+ */
+typedef struct {
+    void ** slots;
+    uint32_t cap;   /**< power of two, 0 = empty */
+    uint32_t count;
+} lv_xml_name_index_t;
+
+void * lv_xml_name_index_find(const lv_xml_name_index_t * idx, const char * name);
+void lv_xml_name_index_insert(lv_xml_name_index_t * idx, void * rec);
+void lv_xml_name_index_remove(lv_xml_name_index_t * idx, void * rec);
+void lv_xml_name_index_clear(lv_xml_name_index_t * idx);
+
 struct _lv_xml_component_scope_t {
     const char * name;
     lv_ll_t style_ll;
@@ -38,6 +57,9 @@ struct _lv_xml_component_scope_t {
     lv_ll_t param_ll;
     lv_ll_t gradient_ll;
     lv_ll_t subjects_ll;
+    lv_xml_name_index_t const_index;    /**< over const_ll; used only when `indexed` */
+    lv_xml_name_index_t subject_index;  /**< over subjects_ll; used only when `indexed` */
+    bool indexed;                       /**< set for the globals scope */
     lv_ll_t subject_expr_ll;   /**< <subject_expr> derived subjects: (expr, ctx) pairs freed at scope teardown */
     lv_ll_t frag_ll;           /**< subject-bound <repeat>/<if> records (xml_frag_record_t): retained capture + observer, freed at scope teardown */
     lv_ll_t instance_ll;       /**< one lv_xml_scope_instance_t per live instance; see `instance_cnt` */

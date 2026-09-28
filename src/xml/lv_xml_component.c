@@ -104,6 +104,7 @@ void lv_xml_component_init(void)
 
     lv_xml_component_scope_init(global_scope);
     global_scope->name = lv_strdup("globals");
+    global_scope->indexed = true;
     global_scope_p = global_scope;
 }
 
@@ -251,6 +252,94 @@ lv_obj_t * lv_xml_component_process(lv_xml_parser_state_t * state, const char * 
     }
 #endif
     return item;
+}
+
+/* FNV-1a; names are short identifiers. */
+static uint32_t name_index_hash(const char * name)
+{
+    uint32_t h = 2166136261u;
+    while(*name) {
+        h ^= (uint8_t)*name++;
+        h *= 16777619u;
+    }
+    return h;
+}
+
+static const char * name_index_rec_name(const void * rec)
+{
+    return *(const char * const *)rec;
+}
+
+void * lv_xml_name_index_find(const lv_xml_name_index_t * idx, const char * name)
+{
+    if(idx->cap == 0 || name == NULL) return NULL;
+    uint32_t mask = idx->cap - 1;
+    for(uint32_t i = name_index_hash(name) & mask;; i = (i + 1) & mask) {
+        void * rec = idx->slots[i];
+        if(rec == NULL) return NULL;
+        if(lv_streq(name_index_rec_name(rec), name)) return rec;
+    }
+}
+
+static void name_index_place(lv_xml_name_index_t * idx, void * rec)
+{
+    uint32_t mask = idx->cap - 1;
+    uint32_t i = name_index_hash(name_index_rec_name(rec)) & mask;
+    while(idx->slots[i] != NULL) i = (i + 1) & mask;
+    idx->slots[i] = rec;
+}
+
+void lv_xml_name_index_insert(lv_xml_name_index_t * idx, void * rec)
+{
+    /* Keep the load at or under one half so probe runs stay short. */
+    if((idx->count + 1) * 2 > idx->cap) {
+        uint32_t new_cap = idx->cap ? idx->cap * 2 : 64;
+        void ** old = idx->slots;
+        uint32_t old_cap = idx->cap;
+        void ** slots = lv_malloc_zeroed(new_cap * sizeof(void *));
+        if(slots == NULL) {
+            /* Unindexed from here on: lookups fall back to the list walk. */
+            LV_LOG_ERROR("OOM: name index grow to %" LV_PRIu32 " slots", new_cap);
+            lv_xml_name_index_clear(idx);
+            return;
+        }
+        idx->slots = slots;
+        idx->cap = new_cap;
+        for(uint32_t i = 0; i < old_cap; i++) {
+            if(old[i]) name_index_place(idx, old[i]);
+        }
+        lv_free(old);
+    }
+    name_index_place(idx, rec);
+    idx->count++;
+}
+
+void lv_xml_name_index_remove(lv_xml_name_index_t * idx, void * rec)
+{
+    if(idx->cap == 0) return;
+    uint32_t mask = idx->cap - 1;
+    uint32_t i = name_index_hash(name_index_rec_name(rec)) & mask;
+    while(idx->slots[i] != rec) {
+        if(idx->slots[i] == NULL) return;
+        i = (i + 1) & mask;
+    }
+    idx->slots[i] = NULL;
+    idx->count--;
+    /* Backward-shift the rest of the probe run so find() never stops early at
+     * the hole just made. */
+    for(uint32_t j = (i + 1) & mask; idx->slots[j] != NULL; j = (j + 1) & mask) {
+        void * moved = idx->slots[j];
+        idx->slots[j] = NULL;
+        name_index_place(idx, moved);
+    }
+}
+
+void lv_xml_name_index_clear(lv_xml_name_index_t * idx)
+{
+    lv_free(idx->slots);
+    idx->slots = NULL;
+    idx->cap = 0;
+    idx->count = 0;
 }
 
 lv_xml_component_scope_t * lv_xml_component_get_scope(const char * component_name)
@@ -748,6 +837,7 @@ static void component_scope_free(lv_xml_component_scope_t * scope)
         lv_free((char *)cnst->name);
         lv_free((char *)cnst->value);
     }
+    lv_xml_name_index_clear(&scope->const_index);
     lv_ll_clear(&scope->const_ll);
 
     lv_xml_param_t * param;
@@ -837,6 +927,7 @@ static void component_scope_free(lv_xml_component_scope_t * scope)
     LV_LL_READ(&scope->subjects_ll, subject) {
         lv_xml_subject_record_release(subject);
     }
+    lv_xml_name_index_clear(&scope->subject_index);
     lv_ll_clear(&scope->subjects_ll);
 
     lv_xml_timeline_t * timeline;

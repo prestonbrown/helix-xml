@@ -257,6 +257,11 @@ lv_xml_component_scope_t * lv_xml_component_get_scope(const char * component_nam
 {
     if(component_name == NULL) return NULL;
 
+    /* Every subject and const lookup that misses its own component falls back to
+     * "globals", which was registered first and so sits at the tail of the list:
+     * answer it without walking every registered component. */
+    if(global_scope_p && lv_streq(component_name, "globals")) return global_scope_p;
+
     lv_xml_component_scope_t * scope;
     LV_LL_READ(&component_scope_ll, scope) {
         if(lv_streq(scope->name, component_name)) return scope;

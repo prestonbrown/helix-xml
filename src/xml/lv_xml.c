@@ -685,6 +685,16 @@ const lv_font_t * lv_xml_get_font(lv_xml_component_scope_t * scope, const char *
  * scope's teardown reads it back — see the `subjects_ll` walk in
  * `lv_xml_component_unregister`.
  */
+static lv_xml_subject_t * scope_find_subject(lv_xml_component_scope_t * scope, const char * name)
+{
+    if(scope->indexed) return lv_xml_name_index_find(&scope->subject_index, name);
+    lv_xml_subject_t * s;
+    LV_LL_READ(&scope->subjects_ll, s) {
+        if(lv_streq(s->name, name)) return s;
+    }
+    return NULL;
+}
+
 static lv_result_t register_subject_impl(lv_xml_component_scope_t * scope, const char * name,
                                          lv_subject_t * subject, bool owned)
 {
@@ -694,39 +704,37 @@ static lv_result_t register_subject_impl(lv_xml_component_scope_t * scope, const
         return LV_RESULT_INVALID;
     }
 
-    lv_xml_subject_t * s;
-    LV_LL_READ(&scope->subjects_ll, s) {
-        if(lv_streq(s->name, name)) {
-            /* Update the pointer — the subject may have moved after a
-             * destroy/recreate cycle (e.g., soft restart). Provenance follows
-             * the new pointer: whoever registered last is the authority on who
-             * owns the storage now.
-             *
-             * This record was the only owner of what it is about to stop
-             * pointing at, so a plain overwrite leaked it: 72 bytes for an int
-             * <subject>, plus two 256-byte buffers for a string one. Release it
-             * through the shared ownership walk, which no-ops on a BORROWED
-             * record (that storage is the caller's - freeing a C++ static here
-             * is a heap abort) and deinits before freeing an owned one, so no
-             * widget is left holding an observer on a reclaimed subject.
-             *
-             * Guarded on the pointer actually changing: registering a subject
-             * over itself - what "adopt whatever the XML declared" code does
-             * after an lv_xml_get_subject() - would otherwise free it and store
-             * the freed pointer straight back. */
-            if(s->subject != subject) {
-                /* A <subject_expr> derived subject additionally has observers on
-                 * its INPUT subjects, all sharing one context that points back
-                 * at what we are about to free. They must come off first or the
-                 * next input change writes into a reclaimed subject. No-op for
-                 * anything that did not come from a <subject_expr>. */
-                if(s->owned) lv_xml_subject_expr_drop_for_subject(scope, s->subject);
-                lv_xml_subject_record_release_storage(s);
-            }
-            s->subject = subject;
-            s->owned = owned;
-            return LV_RESULT_OK;
+    lv_xml_subject_t * s = scope_find_subject(scope, name);
+    if(s) {
+        /* Update the pointer — the subject may have moved after a
+         * destroy/recreate cycle (e.g., soft restart). Provenance follows
+         * the new pointer: whoever registered last is the authority on who
+         * owns the storage now.
+         *
+         * This record was the only owner of what it is about to stop
+         * pointing at, so a plain overwrite leaked it: 72 bytes for an int
+         * <subject>, plus two 256-byte buffers for a string one. Release it
+         * through the shared ownership walk, which no-ops on a BORROWED
+         * record (that storage is the caller's - freeing a C++ static here
+         * is a heap abort) and deinits before freeing an owned one, so no
+         * widget is left holding an observer on a reclaimed subject.
+         *
+         * Guarded on the pointer actually changing: registering a subject
+         * over itself - what "adopt whatever the XML declared" code does
+         * after an lv_xml_get_subject() - would otherwise free it and store
+         * the freed pointer straight back. */
+        if(s->subject != subject) {
+            /* A <subject_expr> derived subject additionally has observers on
+             * its INPUT subjects, all sharing one context that points back
+             * at what we are about to free. They must come off first or the
+             * next input change writes into a reclaimed subject. No-op for
+             * anything that did not come from a <subject_expr>. */
+            if(s->owned) lv_xml_subject_expr_drop_for_subject(scope, s->subject);
+            lv_xml_subject_record_release_storage(s);
         }
+        s->subject = subject;
+        s->owned = owned;
+        return LV_RESULT_OK;
     }
 
     s = lv_ll_ins_head(&scope->subjects_ll);
@@ -738,6 +746,7 @@ static lv_result_t register_subject_impl(lv_xml_component_scope_t * scope, const
     s->name = lv_strdup(name);
     s->subject = subject;
     s->owned = owned;
+    if(scope->indexed) lv_xml_name_index_insert(&scope->subject_index, s);
 
     return LV_RESULT_OK;
 }
@@ -760,18 +769,16 @@ lv_subject_t * lv_xml_get_subject(lv_xml_component_scope_t * scope, const char *
 {
     lv_xml_subject_t * s;
     if(scope) {
-        LV_LL_READ(&scope->subjects_ll, s) {
-            if(lv_streq(s->name, name)) return s->subject;
-        }
+        s = scope_find_subject(scope, name);
+        if(s) return s->subject;
     }
 
     /*If not found in the component check the global space*/
     if((scope == NULL || scope->name == NULL) || !lv_streq(scope->name, "globals")) {
         scope = lv_xml_component_get_scope("globals");
         if(scope) {
-            LV_LL_READ(&scope->subjects_ll, s) {
-                if(lv_streq(s->name, name)) return s->subject;
-            }
+            s = scope_find_subject(scope, name);
+            if(s) return s->subject;
         }
     }
 
@@ -792,6 +799,8 @@ lv_result_t lv_xml_unregister_subject(lv_xml_component_scope_t * scope, const ch
              * dropped. Freeing unconditionally would abort on C++ storage;
              * freeing nothing leaked every parser-allocated subject removed by
              * name. */
+            /* Out of the index first: it hashes s->name, which the release frees. */
+            if(scope->indexed) lv_xml_name_index_remove(&scope->subject_index, s);
             lv_xml_subject_record_release(s);
             lv_ll_remove(&scope->subjects_ll, s);
             lv_free(s); /* the record; s->subject was handled above */
@@ -853,6 +862,16 @@ void * lv_xml_get_timeline(lv_xml_component_scope_t * scope, const char * name)
 }
 
 
+static lv_xml_const_t * scope_find_const(lv_xml_component_scope_t * scope, const char * name)
+{
+    if(scope->indexed) return lv_xml_name_index_find(&scope->const_index, name);
+    lv_xml_const_t * cnst;
+    LV_LL_READ(&scope->const_ll, cnst) {
+        if(lv_streq(cnst->name, name)) return cnst;
+    }
+    return NULL;
+}
+
 lv_result_t lv_xml_register_const(lv_xml_component_scope_t * scope, const char * name, const char * value)
 {
     if(scope == NULL) scope = lv_xml_component_get_scope("globals");
@@ -861,12 +880,10 @@ lv_result_t lv_xml_register_const(lv_xml_component_scope_t * scope, const char *
         return LV_RESULT_INVALID;
     }
 
-    lv_xml_const_t * cnst;
-    LV_LL_READ(&scope->const_ll, cnst) {
-        if(lv_streq(cnst->name, name)) {
-            LV_LOG_INFO("Const `%s` is already registered. Don't register it again.", name);
-            return LV_RESULT_OK;
-        }
+    lv_xml_const_t * cnst = scope_find_const(scope, name);
+    if(cnst) {
+        LV_LOG_INFO("Const `%s` is already registered. Don't register it again.", name);
+        return LV_RESULT_OK;
     }
 
     cnst = lv_ll_ins_head(&scope->const_ll);
@@ -878,6 +895,7 @@ lv_result_t lv_xml_register_const(lv_xml_component_scope_t * scope, const char *
 
     cnst->name = lv_strdup(name);
     cnst->value = lv_strdup(value);
+    if(scope->indexed) lv_xml_name_index_insert(&scope->const_index, cnst);
 
     return LV_RESULT_OK;
 }
@@ -890,13 +908,11 @@ lv_result_t lv_xml_update_const(lv_xml_component_scope_t * scope, const char * n
         return LV_RESULT_INVALID;
     }
 
-    lv_xml_const_t * cnst;
-    LV_LL_READ(&scope->const_ll, cnst) {
-        if(lv_streq(cnst->name, name)) {
-            lv_free((void *)cnst->value);
-            cnst->value = lv_strdup(value);
-            return LV_RESULT_OK;
-        }
+    lv_xml_const_t * cnst = scope_find_const(scope, name);
+    if(cnst) {
+        lv_free((void *)cnst->value);
+        cnst->value = lv_strdup(value);
+        return LV_RESULT_OK;
     }
 
     LV_LOG_WARN("Const `%s` not found for update, registering as new.", name);
@@ -911,18 +927,16 @@ static const char * lv_xml_get_const_internal(lv_xml_component_scope_t * scope, 
 
     lv_xml_const_t * cnst;
     if(scope) {
-        LV_LL_READ(&scope->const_ll, cnst) {
-            if(lv_streq(cnst->name, name)) return cnst->value;
-        }
+        cnst = scope_find_const(scope, name);
+        if(cnst) return cnst->value;
     }
 
     /*If not found in the component check the global space*/
     if((scope == NULL || scope->name == NULL) || !lv_streq(scope->name, "globals")) {
         scope = lv_xml_component_get_scope("globals");
         if(scope) {
-            LV_LL_READ(&scope->const_ll, cnst) {
-                if(lv_streq(cnst->name, name)) return cnst->value;
-            }
+            cnst = scope_find_const(scope, name);
+            if(cnst) return cnst->value;
         }
     }
 

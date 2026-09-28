@@ -346,6 +346,21 @@ static void test_update_const_registers_an_absent_name_and_warns(void)
                              "creating a const through update_const must be reported - it is usually a typo");
 }
 
+/** set_const registers an absent name silently and replaces an existing one. */
+static void test_set_const_upserts_without_warning(void)
+{
+    log_capture_start();
+    lv_result_t first = lv_xml_set_const(NULL, "derived_token", "12");
+    lv_result_t second = lv_xml_set_const(NULL, "derived_token", "16");
+    log_capture_stop();
+
+    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)first);
+    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)second);
+    TEST_ASSERT_EQUAL_STRING("16", lv_xml_get_const(NULL, "derived_token"));
+    TEST_ASSERT_FALSE_MESSAGE(log_contains("not found for update"),
+                              "set_const on an absent name must not warn");
+}
+
 /** The silent/loud pair, on the same absent name, in the same test. */
 static void test_get_const_warns_for_an_absent_name_but_the_silent_variant_does_not(void)
 {
@@ -760,6 +775,7 @@ int main(void)
     RUN_TEST(test_registering_a_duplicate_const_keeps_the_first_value);
     RUN_TEST(test_update_const_replaces_an_existing_value);
     RUN_TEST(test_update_const_registers_an_absent_name_and_warns);
+    RUN_TEST(test_set_const_upserts_without_warning);
     RUN_TEST(test_get_const_warns_for_an_absent_name_but_the_silent_variant_does_not);
 
     RUN_TEST(test_registering_a_font_makes_it_findable_by_name);

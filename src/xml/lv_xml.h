@@ -139,6 +139,17 @@ lv_subject_t * lv_xml_get_subject(lv_xml_component_scope_t * scope, const char *
 
 lv_result_t lv_xml_register_const(lv_xml_component_scope_t * scope, const char * name, const char * value);
 
+/**
+ * Replace a constant's value, or register it if it is absent.
+ * Unlike lv_xml_update_const(), an absent name is expected and not reported.
+ * @param scope     The scope to write in. If `NULL`, the global scope.
+ */
+lv_result_t lv_xml_set_const(lv_xml_component_scope_t * scope, const char * name, const char * value);
+
+/**
+ * Replace a constant's value. An absent name is reported as a likely typo and
+ * registered anyway; use lv_xml_set_const() where absence is expected.
+ */
 lv_result_t lv_xml_update_const(lv_xml_component_scope_t * scope, const char * name, const char * value);
 
 const char * lv_xml_get_const(lv_xml_component_scope_t * scope, const char * name);

@@ -471,23 +471,6 @@ void * lv_xml_create(lv_obj_t * parent, const char * name, const char ** attrs)
             return NULL;
         }
         const char * value_of_name = NULL;
-#if LV_USE_OBJ_NAME
-        /*Report an instance-site `name` displacing one the component set on its
-         *own <view> root. Checked HERE, before apply_cb: apply_cb applies the
-         *instance-site name itself and frees the string lv_obj_get_name()
-         *returns, so afterwards the two are indistinguishable. Once per scope -
-         *see `name_clash_warned`.*/
-        if(!scope->name_clash_warned) {
-            const char * site_name = attrs ? lv_xml_get_value_of(attrs, "name") : NULL;
-            const char * view_name = lv_obj_get_name(item);
-            if(site_name && view_name && !lv_streq(view_name, site_name)) {
-                scope->name_clash_warned = 1;
-                LV_LOG_WARN("Component '%s' sets name=\"%s\" on its own <view>; "
-                            "the instance-site name=\"%s\" takes precedence",
-                            scope->name, view_name, site_name);
-            }
-        }
-#endif
         if(attrs) {
             lv_xml_parser_state_t state;
             lv_xml_parser_state_init(&state);
@@ -902,6 +885,22 @@ lv_result_t lv_xml_register_const(lv_xml_component_scope_t * scope, const char *
     return LV_RESULT_OK;
 }
 
+lv_result_t lv_xml_set_const(lv_xml_component_scope_t * scope, const char * name, const char * value)
+{
+    if(scope == NULL) scope = lv_xml_component_get_scope("globals");
+    if(scope == NULL) {
+        LV_LOG_WARN("No component found to set constant `%s`", name);
+        return LV_RESULT_INVALID;
+    }
+
+    lv_xml_const_t * cnst = scope_find_const(scope, name);
+    if(cnst == NULL) return lv_xml_register_const(scope, name, value);
+
+    lv_free((void *)cnst->value);
+    cnst->value = lv_strdup(value);
+    return LV_RESULT_OK;
+}
+
 lv_result_t lv_xml_update_const(lv_xml_component_scope_t * scope, const char * name, const char * value)
 {
     if(scope == NULL) scope = lv_xml_component_get_scope("globals");
@@ -910,15 +909,10 @@ lv_result_t lv_xml_update_const(lv_xml_component_scope_t * scope, const char * n
         return LV_RESULT_INVALID;
     }
 
-    lv_xml_const_t * cnst = scope_find_const(scope, name);
-    if(cnst) {
-        lv_free((void *)cnst->value);
-        cnst->value = lv_strdup(value);
-        return LV_RESULT_OK;
+    if(scope_find_const(scope, name) == NULL) {
+        LV_LOG_WARN("Const `%s` not found for update, registering as new.", name);
     }
-
-    LV_LOG_WARN("Const `%s` not found for update, registering as new.", name);
-    return lv_xml_register_const(scope, name, value);
+    return lv_xml_set_const(scope, name, value);
 }
 
 static const char * lv_xml_get_const_internal(lv_xml_component_scope_t * scope, const char * name, bool silent)

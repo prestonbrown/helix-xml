@@ -900,6 +900,36 @@ static void test_gradient_reference_reaches_the_widget_from_a_style_and_from_an_
         "inline `style_bg_grad=\"warm\"` must resolve to the same descriptor");
 }
 
+static const char STYLE_GRAD_OPA_XML[] =
+    "<component>"
+    "  <styles>"
+    "    <style name=\"fade\" bg_main_opa=\"0\" bg_grad_opa=\"255\"/>"
+    "  </styles>"
+    "  <view extends=\"lv_obj\" name=\"fade_root\">"
+    "    <lv_obj name=\"via_style\">"
+    "      <style name=\"fade\"/>"
+    "    </lv_obj>"
+    "    <lv_obj name=\"via_inline\" style_bg_main_opa=\"20%\" style_bg_grad_opa=\"128\"/>"
+    "  </view>"
+    "</component>";
+
+static void test_gradient_end_opacities_reach_the_widget_from_a_style_and_from_an_attribute(void)
+{
+    ASSERT_XML_REGISTERS("style_grad_opa", STYLE_GRAD_OPA_XML);
+
+    lv_obj_t * root = XML_CREATE(helix_test_env_screen(), "style_grad_opa", NULL);
+    helix_test_pump(30);
+
+    lv_obj_t * styled = ASSERT_NAMED(root, "via_style");
+    TEST_ASSERT_EQUAL_UINT8(0, lv_obj_get_style_bg_main_opa(styled, LV_PART_MAIN));
+    TEST_ASSERT_EQUAL_UINT8(255, lv_obj_get_style_bg_grad_opa(styled, LV_PART_MAIN));
+
+    /* Inline values take the same opa syntax as every other *_opa, percent included. */
+    lv_obj_t * inline_obj = ASSERT_NAMED(root, "via_inline");
+    TEST_ASSERT_EQUAL_UINT8(LV_OPA_20, lv_obj_get_style_bg_main_opa(inline_obj, LV_PART_MAIN));
+    TEST_ASSERT_EQUAL_UINT8(128, lv_obj_get_style_bg_grad_opa(inline_obj, LV_PART_MAIN));
+}
+
 /*===========================================================================
  * Failure paths
  *==========================================================================*/
@@ -1764,6 +1794,7 @@ int main(void)
 
     RUN_TEST(test_gradient_declared_in_a_component_scope_is_resolvable_by_name);
     RUN_TEST(test_gradient_reference_reaches_the_widget_from_a_style_and_from_an_attribute);
+    RUN_TEST(test_gradient_end_opacities_reach_the_widget_from_a_style_and_from_an_attribute);
 
     RUN_TEST(test_style_reference_to_an_unregistered_name_warns_and_leaves_the_widget_bare);
     RUN_TEST(test_registering_the_same_style_name_twice_extends_the_first);

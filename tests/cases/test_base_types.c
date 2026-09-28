@@ -858,6 +858,8 @@ static const enum_case_t STYLE_PROP_CASES[] = {
     {"bg_grad_color", LV_STYLE_BG_GRAD_COLOR},
     {"bg_main_stop", LV_STYLE_BG_MAIN_STOP},
     {"bg_grad_stop", LV_STYLE_BG_GRAD_STOP},
+    {"bg_main_opa", LV_STYLE_BG_MAIN_OPA},
+    {"bg_grad_opa", LV_STYLE_BG_GRAD_OPA},
     {"bg_grad", LV_STYLE_BG_GRAD},
     /* background image */
     {"bg_image_src", LV_STYLE_BG_IMAGE_SRC},
@@ -950,8 +952,8 @@ static const enum_case_t STYLE_PROP_CASES[] = {
 
 static void test_style_prop_to_enum_accepts_every_property_name(void)
 {
-    TEST_ASSERT_EQUAL_size_t_MESSAGE(105, sizeof(STYLE_PROP_CASES) / sizeof(STYLE_PROP_CASES[0]),
-                                     "the style-prop table must stay exhaustive - 105 accepted strings");
+    TEST_ASSERT_EQUAL_size_t_MESSAGE(107, sizeof(STYLE_PROP_CASES) / sizeof(STYLE_PROP_CASES[0]),
+                                     "the style-prop table must stay exhaustive - 107 accepted strings");
     RUN_ENUM_TABLE(lv_xml_style_prop_to_enum, STYLE_PROP_CASES);
 }
 

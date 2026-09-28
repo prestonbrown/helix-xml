@@ -687,7 +687,8 @@ const lv_font_t * lv_xml_get_font(lv_xml_component_scope_t * scope, const char *
  */
 static lv_xml_subject_t * scope_find_subject(lv_xml_component_scope_t * scope, const char * name)
 {
-    if(scope->indexed) return lv_xml_name_index_find(&scope->subject_index, name);
+    if(scope->indexed && lv_xml_name_index_usable(&scope->subject_index))
+        return lv_xml_name_index_find(&scope->subject_index, name);
     lv_xml_subject_t * s;
     LV_LL_READ(&scope->subjects_ll, s) {
         if(lv_streq(s->name, name)) return s;
@@ -864,7 +865,8 @@ void * lv_xml_get_timeline(lv_xml_component_scope_t * scope, const char * name)
 
 static lv_xml_const_t * scope_find_const(lv_xml_component_scope_t * scope, const char * name)
 {
-    if(scope->indexed) return lv_xml_name_index_find(&scope->const_index, name);
+    if(scope->indexed && lv_xml_name_index_usable(&scope->const_index))
+        return lv_xml_name_index_find(&scope->const_index, name);
     lv_xml_const_t * cnst;
     LV_LL_READ(&scope->const_ll, cnst) {
         if(lv_streq(cnst->name, name)) return cnst;

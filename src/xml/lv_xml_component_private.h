@@ -43,7 +43,14 @@ typedef struct {
     void ** slots;
     uint32_t cap;   /**< power of two, 0 = empty */
     uint32_t count;
+    bool failed;    /**< a grow ran out of memory; the list walk answers instead */
 } lv_xml_name_index_t;
+
+/** False once a grow has failed: callers must walk the list instead. */
+static inline bool lv_xml_name_index_usable(const lv_xml_name_index_t * idx)
+{
+    return !idx->failed;
+}
 
 void * lv_xml_name_index_find(const lv_xml_name_index_t * idx, const char * name);
 void lv_xml_name_index_insert(lv_xml_name_index_t * idx, void * rec);

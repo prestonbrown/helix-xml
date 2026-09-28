@@ -291,6 +291,7 @@ static void name_index_place(lv_xml_name_index_t * idx, void * rec)
 
 void lv_xml_name_index_insert(lv_xml_name_index_t * idx, void * rec)
 {
+    if(idx->failed) return;
     /* Keep the load at or under one half so probe runs stay short. */
     if((idx->count + 1) * 2 > idx->cap) {
         uint32_t new_cap = idx->cap ? idx->cap * 2 : 64;
@@ -301,6 +302,7 @@ void lv_xml_name_index_insert(lv_xml_name_index_t * idx, void * rec)
             /* Unindexed from here on: lookups fall back to the list walk. */
             LV_LOG_ERROR("OOM: name index grow to %" LV_PRIu32 " slots", new_cap);
             lv_xml_name_index_clear(idx);
+            idx->failed = true;
             return;
         }
         idx->slots = slots;
@@ -316,7 +318,7 @@ void lv_xml_name_index_insert(lv_xml_name_index_t * idx, void * rec)
 
 void lv_xml_name_index_remove(lv_xml_name_index_t * idx, void * rec)
 {
-    if(idx->cap == 0) return;
+    if(idx->failed || idx->cap == 0) return;
     uint32_t mask = idx->cap - 1;
     uint32_t i = name_index_hash(name_index_rec_name(rec)) & mask;
     while(idx->slots[i] != rec) {
@@ -340,6 +342,7 @@ void lv_xml_name_index_clear(lv_xml_name_index_t * idx)
     idx->slots = NULL;
     idx->cap = 0;
     idx->count = 0;
+    idx->failed = false;
 }
 
 lv_xml_component_scope_t * lv_xml_component_get_scope(const char * component_name)
@@ -406,7 +409,16 @@ lv_result_t lv_xml_register_component_from_data(const char * name, const char * 
                      XML_ErrorString(XML_GetErrorCode(parser)),
                      (unsigned long)XML_GetCurrentLineNumber(parser));
         XML_ParserFree(parser);
-        lv_free((char *)state.scope.extends);
+        if(globals) {
+            /* The parse wrote into this copy of the live global scope, and a
+             * grown name index has already freed the array the original still
+             * points at: the copy is the only consistent state left. */
+            lv_memcpy(lv_xml_component_get_scope("globals"), &state.scope,
+                      sizeof(lv_xml_component_scope_t));
+        }
+        else {
+            lv_free((char *)state.scope.extends);
+        }
         return LV_RESULT_INVALID;
     }
 
@@ -599,6 +611,8 @@ void lv_xml_component_deinit(void)
      * Draining the list here makes lv_xml_deinit() actually give the memory
      * back and lets an lv_xml_deinit()/lv_xml_init() cycle start clean. */
     lv_xml_component_scope_t * scope;
+    /* The first drain frees the globals node: stop handing it out before. */
+    global_scope_p = NULL;
     while((scope = lv_ll_get_head(&component_scope_ll)) != NULL) {
         lv_ll_remove(&component_scope_ll, scope);
         component_scope_free(scope);
@@ -619,8 +633,6 @@ void lv_xml_component_deinit(void)
         component_scope_free(scope);
     }
     lv_ll_init(&pending_free_scope_ll, sizeof(lv_xml_component_scope_t));
-
-    global_scope_p = NULL;
 }
 
 uint32_t lv_xml_get_transition_scale(void)

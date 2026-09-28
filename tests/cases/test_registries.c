@@ -2,7 +2,8 @@
  * @file test_registries.c
  *
  * The five global name registries in src/xml/lv_xml.c: subjects, consts, fonts,
- * images and event callbacks.
+ * images and event callbacks. Also the widget-processor registry in
+ * src/xml/lv_xml_widget.c, which resolves every element tag.
  *
  * Every one of them is a flat `name -> thing` linked list hung off a component
  * scope, with the built-in `"globals"` scope standing in whenever the caller
@@ -755,6 +756,45 @@ static void test_unregistering_a_component_frees_its_event_cb_records(void)
 }
 
 /*---------------------------------------------------------------------------
+ * Widget processors
+ *--------------------------------------------------------------------------*/
+
+static void * reg_widget_create_first(lv_xml_parser_state_t * state, const char ** attrs)
+{
+    LV_UNUSED(state);
+    LV_UNUSED(attrs);
+    return NULL;
+}
+
+static void * reg_widget_create_second(lv_xml_parser_state_t * state, const char ** attrs)
+{
+    LV_UNUSED(state);
+    LV_UNUSED(attrs);
+    return NULL;
+}
+
+static void reg_widget_apply(lv_xml_parser_state_t * state, const char ** attrs)
+{
+    LV_UNUSED(state);
+    LV_UNUSED(attrs);
+}
+
+void test_re_registering_a_widget_name_makes_the_newer_processor_answer(void)
+{
+    lv_xml_register_widget("reg_widget", reg_widget_create_first, reg_widget_apply);
+    lv_widget_processor_t * p = lv_xml_widget_get_processor("reg_widget");
+    TEST_ASSERT_NOT_NULL_MESSAGE(p, "a registered widget must be findable by name");
+    TEST_ASSERT_TRUE_MESSAGE(p->create_cb == reg_widget_create_first,
+                             "the only registration must be the one found");
+
+    lv_xml_register_widget("reg_widget", reg_widget_create_second, reg_widget_apply);
+    p = lv_xml_widget_get_processor("reg_widget");
+    TEST_ASSERT_NOT_NULL(p);
+    TEST_ASSERT_TRUE_MESSAGE(p->create_cb == reg_widget_create_second,
+                             "an app re-registering a widget name overrides the earlier processor");
+}
+
+/*---------------------------------------------------------------------------
  * main
  *--------------------------------------------------------------------------*/
 
@@ -794,6 +834,8 @@ int main(void)
     RUN_TEST(test_event_cb_foreach_visits_every_registration_in_the_scope);
     RUN_TEST(test_event_cb_foreach_does_not_fall_back_to_globals_but_get_does);
     RUN_TEST(test_unregistering_a_component_frees_its_event_cb_records);
+
+    RUN_TEST(test_re_registering_a_widget_name_makes_the_newer_processor_answer);
 
     return UNITY_END();
 }

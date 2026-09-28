@@ -32,10 +32,12 @@ extern "C" {
 typedef  void * (*lv_xml_component_process_cb_t)(lv_obj_t * parent, const char * data, const char ** attrs);
 
 /**
- * Open-addressed name -> record index over a scope list whose records start
- * with `const char * name` (lv_xml_const_t, lv_xml_subject_t). Only the globals
- * scope keeps one: its lists hold hundreds of entries, and a linear walk
- * through them (PSRAM on the ESP32) dominated every lookup and registration.
+ * Open-addressed name -> record index over a list whose records start with
+ * `const char * name` (lv_xml_const_t, lv_xml_subject_t, the component scopes,
+ * lv_widget_processor_t). Kept for the globals scope's consts and subjects and
+ * for the component and widget registries: each holds hundreds of entries, and
+ * a linear walk through them (PSRAM on the ESP32) dominated every lookup and
+ * registration.
  * Every insert, remove and clear of an indexed list must go through the
  * matching lv_xml_name_index_* call, or the index keeps a dangling record.
  */

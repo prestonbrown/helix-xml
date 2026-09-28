@@ -9,6 +9,7 @@
  *      INCLUDES
  *********************/
 #include "lv_xml_widget.h"
+#include "lv_xml_component_private.h"
 #include "lv_xml_parser.h"
 #include <stdlib/lv_string.h>
 #include <stdlib/lv_mem.h>
@@ -32,6 +33,10 @@
  **********************/
 static lv_widget_processor_t * widget_processor_head;
 
+/** Name -> head-most processor of that name. Every element of every view looks
+ *  its tag up here, and a component tag misses the whole list twice. */
+static lv_xml_name_index_t widget_processor_index;
+
 /**********************
  *      MACROS
  **********************/
@@ -54,6 +59,12 @@ lv_result_t lv_xml_register_widget(const char * name, lv_xml_widget_create_cb_t 
     else {
         p->next = widget_processor_head;
         widget_processor_head = p;
+    }
+
+    if(p->name) {
+        lv_widget_processor_t * shadowed = lv_xml_name_index_find(&widget_processor_index, p->name);
+        if(shadowed) lv_xml_name_index_remove(&widget_processor_index, shadowed);
+        lv_xml_name_index_insert(&widget_processor_index, p);
     }
 
     return LV_RESULT_OK;
@@ -85,10 +96,19 @@ void lv_xml_widget_deinit(void)
         p = next;
     }
     widget_processor_head = NULL;
+    lv_xml_name_index_clear(&widget_processor_index);
 }
 
 lv_widget_processor_t * lv_xml_widget_get_processor(const char * name)
 {
+    if(lv_xml_name_index_usable(&widget_processor_index)) {
+        lv_widget_processor_t * hit = lv_xml_name_index_find(&widget_processor_index, name);
+        if(hit) return hit;
+        char prefixed[256];
+        lv_snprintf(prefixed, sizeof(prefixed), "lv_obj-%s", name);
+        return lv_xml_name_index_find(&widget_processor_index, prefixed);
+    }
+
     /* Select the widget specific parser type based on the name */
     lv_widget_processor_t * p = widget_processor_head;
     while(p) {

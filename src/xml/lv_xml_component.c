@@ -63,6 +63,8 @@ static void scope_instance_delete_cb(lv_event_t * e);
 static void scope_free_async_cb(void * scope_v);
 static void subject_expr_record_release(lv_xml_subject_expr_t * record);
 static void scope_retime_transitions(lv_ll_t * list);
+static void component_scope_index_link(lv_xml_component_scope_t * scope);
+static void component_scope_index_unlink(lv_xml_component_scope_t * scope);
 
 /**********************
  *  STATIC VARIABLES
@@ -81,6 +83,12 @@ static lv_ll_t pending_free_scope_ll;
 /** The `"globals"` scope: shared metadata, not a component, and never retired.
  *  Kept so the instance counting can skip it explicitly. */
 static lv_xml_component_scope_t * global_scope_p;
+
+/** Name -> scope over `component_scope_ll`, answering what the list walk would:
+ *  the head-most scope registered under that name. Every component tag and every
+ *  `component.style` reference looks a scope up, and the list holds hundreds.
+ *  `globals` is left out; `global_scope_p` answers it. */
+static lv_xml_name_index_t component_scope_index;
 
 /** Fixed-point fraction of 256 applied to every declared transition duration.
  *  256 runs transitions as authored; 0 disables motion. */
@@ -338,6 +346,11 @@ lv_xml_component_scope_t * lv_xml_component_get_scope(const char * component_nam
      * answer it without walking every registered component. */
     if(global_scope_p && lv_streq(component_name, "globals")) return global_scope_p;
 
+    if(lv_xml_name_index_usable(&component_scope_index)) {
+        lv_xml_component_scope_t * hit = lv_xml_name_index_find(&component_scope_index, component_name);
+        if(hit || !lv_streq(component_name, "globals")) return hit;
+    }
+
     lv_xml_component_scope_t * scope;
     LV_LL_READ(&component_scope_ll, scope) {
         if(lv_streq(scope->name, component_name)) return scope;
@@ -426,6 +439,7 @@ lv_result_t lv_xml_register_component_from_data(const char * name, const char * 
         /* Extract view content directly instead of using XML parser */
         scope->view_def = extract_view_content(xml_def);
         scope->name = lv_strdup(name);
+        component_scope_index_link(scope);
         if(!scope->view_def) {
             LV_LOG_WARN("Failed to extract view content");
             /* Clean up and return error. get_scope() matches from the head, so
@@ -597,6 +611,7 @@ void lv_xml_component_deinit(void)
     lv_xml_component_scope_t * scope;
     /* The first drain frees the globals node: stop handing it out before. */
     global_scope_p = NULL;
+    lv_xml_name_index_clear(&component_scope_index);
     while((scope = lv_ll_get_head(&component_scope_ll)) != NULL) {
         lv_ll_remove(&component_scope_ll, scope);
         component_scope_free(scope);
@@ -654,6 +669,32 @@ static void scope_retime_transitions(lv_ll_t * list)
     }
 }
 
+/** Make `scope`, just inserted at the head of `component_scope_ll`, the index's
+ *  answer for its name. */
+static void component_scope_index_link(lv_xml_component_scope_t * scope)
+{
+    if(scope->name == NULL) return;
+    lv_xml_component_scope_t * shadowed = lv_xml_name_index_find(&component_scope_index, scope->name);
+    if(shadowed) lv_xml_name_index_remove(&component_scope_index, shadowed);
+    lv_xml_name_index_insert(&component_scope_index, scope);
+}
+
+/** Take `scope`, about to leave `component_scope_ll`, out of the index, handing
+ *  its name to the next scope registered under it, if one is still listed. */
+static void component_scope_index_unlink(lv_xml_component_scope_t * scope)
+{
+    if(scope->name == NULL) return;
+    if(lv_xml_name_index_find(&component_scope_index, scope->name) != scope) return;
+    lv_xml_name_index_remove(&component_scope_index, scope);
+    lv_xml_component_scope_t * other;
+    LV_LL_READ(&component_scope_ll, other) {
+        if(other != scope && other->name != NULL && lv_streq(other->name, scope->name)) {
+            lv_xml_name_index_insert(&component_scope_index, other);
+            return;
+        }
+    }
+}
+
 /** Unlink and free every scope registered under `name` except `keep`.
  *  The registry is a plain list with no uniqueness constraint, so this is what
  *  makes re-registration a replacement rather than a shadowing insert. */
@@ -705,6 +746,7 @@ static void component_scope_retire(lv_xml_component_scope_t * scope)
      * onto a layer, or an overlay scrim left standing. `scope_styles_are_live()`
      * asks the object tree directly instead of predicting from a count, so a
      * scope whose styles are still referenced is deferred rather than freed. */
+    component_scope_index_unlink(scope);
     if(scope->instance_cnt == 0 && !scope->styles_borrowed && !scope_styles_are_live(scope)) {
         lv_ll_remove(&component_scope_ll, scope);
         component_scope_free(scope);

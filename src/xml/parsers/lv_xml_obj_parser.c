@@ -1526,6 +1526,8 @@ static void apply_styles(lv_xml_parser_state_t * state, lv_obj_t * obj, const ch
     else SET_STYLE_IF(bg_grad_color, lv_xml_to_color(value));
     else SET_STYLE_IF(bg_main_stop, lv_xml_atoi(value));
     else SET_STYLE_IF(bg_grad_stop, lv_xml_atoi(value));
+    else SET_STYLE_IF(bg_main_opa, lv_xml_to_opa(value));
+    else SET_STYLE_IF(bg_grad_opa, lv_xml_to_opa(value));
     else SET_STYLE_IF(bg_grad, lv_xml_component_get_grad(&state->scope, value));
 
     else SET_STYLE_IF(bg_image_src, lv_xml_get_image(&state->scope, value));

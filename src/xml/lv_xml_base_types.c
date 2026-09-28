@@ -446,6 +446,8 @@ lv_style_prop_t lv_xml_style_prop_to_enum(const char * txt)
     else if(lv_streq(txt, "bg_grad_color")) return LV_STYLE_BG_GRAD_COLOR;
     else if(lv_streq(txt, "bg_main_stop")) return LV_STYLE_BG_MAIN_STOP;
     else if(lv_streq(txt, "bg_grad_stop")) return LV_STYLE_BG_GRAD_STOP;
+    else if(lv_streq(txt, "bg_main_opa")) return LV_STYLE_BG_MAIN_OPA;
+    else if(lv_streq(txt, "bg_grad_opa")) return LV_STYLE_BG_GRAD_OPA;
     else if(lv_streq(txt, "bg_grad")) return LV_STYLE_BG_GRAD;
 
     else if(lv_streq(txt, "bg_image_src")) return LV_STYLE_BG_IMAGE_SRC;

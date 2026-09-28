@@ -246,6 +246,8 @@ lv_result_t lv_xml_register_style(lv_xml_component_scope_t * scope, const char *
         else SET_STYLE_IF(bg_grad_color, lv_xml_to_color(value));
         else SET_STYLE_IF(bg_main_stop, lv_xml_atoi(value));
         else SET_STYLE_IF(bg_grad_stop, lv_xml_atoi(value));
+        else SET_STYLE_IF(bg_main_opa, lv_xml_to_opa(value));
+        else SET_STYLE_IF(bg_grad_opa, lv_xml_to_opa(value));
         else SET_STYLE_IF(bg_grad, lv_xml_component_get_grad(scope, value));
 
         else SET_STYLE_IF(bg_image_src, lv_xml_get_image(scope, value));

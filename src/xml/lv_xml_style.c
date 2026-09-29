@@ -137,6 +137,15 @@ lv_result_t lv_xml_register_style(lv_xml_component_scope_t * scope, const char *
         if(lv_streq(name, "help")) continue;
         if(lv_streq(name, "figma_node_id")) continue;
 
+        if(value[0] == '-' && value[1] == '#') {
+            LV_LOG_WARN("`%s` in style of component `%s` (property `%s`) negates a const, which is "
+                        "not supported; define a negative-valued const instead - property skipped",
+                        value,
+                        (scope && scope->name) ? scope->name : "<unknown>",
+                        name);
+            continue;
+        }
+
         if(value[0] == '#') {
             const char * value_clean = &value[1];
             /* The component's consts first, then globals (indexed). */

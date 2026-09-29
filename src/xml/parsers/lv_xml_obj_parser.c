@@ -13,6 +13,7 @@
 #if LV_USE_XML
 
 #include <lvgl.h>
+#include <string.h>
 #include <lvgl_private.h>
 #include "../lv_xml_private.h"
 #include "../lv_xml_expr.h"
@@ -49,7 +50,7 @@ typedef struct {
  *  STATIC PROTOTYPES
  **********************/
 static lv_obj_flag_t flag_to_enum(const char * txt);
-static void apply_styles(lv_xml_parser_state_t * state, lv_obj_t * obj, const char * name, const char * value);
+static bool apply_styles(lv_xml_parser_state_t * state, lv_obj_t * obj, const char * name, const char * value);
 static void screen_create_on_trigger_event_cb(lv_event_t * e);
 static void screen_load_on_trigger_event_cb(lv_event_t * e);
 static void delete_on_screen_unloaded_event_cb(lv_event_t * e);
@@ -247,8 +248,7 @@ void lv_xml_obj_apply(lv_xml_parser_state_t * state, const char ** attrs)
             }
         }
 
-        else if(name_len > 6 && lv_memcmp("style_", name, 6) == 0) {
-            apply_styles(state, item, name, value);
+        else if(name_len > 6 && lv_memcmp("style_", name, 6) == 0 && apply_styles(state, item, name, value)) {
         }
         /* Not one of lv_obj's own. Recorded, not warned: the widget-specific
          * chain that called this one gets its turn next, and only an attribute
@@ -1478,8 +1478,18 @@ static lv_obj_flag_t flag_to_enum(const char * txt)
 }
 
 
-static void apply_styles(lv_xml_parser_state_t * state, lv_obj_t * obj, const char * name, const char * value)
+/* Returns false for a name that is not a style property, so the caller can
+ * report it through the unknown-attribute check like any other typo. */
+static bool apply_styles(lv_xml_parser_state_t * state, lv_obj_t * obj, const char * name, const char * value)
 {
+    /* The selector separator is '-'. A ':' leaves the whole name unmatched, so
+     * `style_bg_color:checked` would otherwise vanish on every widget, including
+     * the application widgets the unknown-attribute check never arms for. */
+    if(strchr(name, ':') != NULL) {
+        LV_LOG_WARN("`%s` is ignored: style selectors follow '-', not ':' (e.g. style_bg_color-checked)", name);
+        return true;
+    }
+
     char name_local[512];
     lv_strlcpy(name_local, name, sizeof(name_local));
 
@@ -1656,6 +1666,9 @@ static void apply_styles(lv_xml_parser_state_t * state, lv_obj_t * obj, const ch
             lv_obj_set_style_grid_row_dsc_array(obj, dsc_array, selector);
         }
     }
+    else return false;
+
+    return true;
 }
 
 

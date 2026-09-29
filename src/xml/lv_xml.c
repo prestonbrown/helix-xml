@@ -1260,6 +1260,18 @@ static void resolve_consts(const char ** item_attrs, lv_xml_component_scope_t * 
         const char * name = item_attrs[i];
         const char * value = item_attrs[i + 1];
         if(lv_streq(name, "styles")) continue; /*Styles will handle it themselves*/
+        /*A const cannot be negated in place: "-#x" is not a reference, and passed
+         *through it parses as 0. Dropped like an unknown const, and said so.*/
+        if(value[0] == '-' && value[1] == '#') {
+            LV_LOG_WARN("`%s` in component `%s` (attribute `%s`) negates a const, which is not "
+                        "supported; define a negative-valued const instead - attribute dropped",
+                        value,
+                        (scope && scope->name) ? scope->name : "<unknown>",
+                        name);
+            item_attrs[i] = "";
+            item_attrs[i + 1] = "";
+            continue;
+        }
         if(value[0] == '#') {
             const char * value_clean = &value[1];
 

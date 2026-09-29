@@ -592,6 +592,12 @@ static void test_unknown_attribute_on_a_known_widget_warns(void)
             "<lv_label name=\"a\" text=\"Kept\"/></view></component>",
             true, "Unknown attribute \"scrollabel\" on <lv_obj>"
         },
+        {
+            "misspelled style property",
+            "<component><view extends=\"lv_obj\" name=\"r\">"
+            "<lv_label name=\"a\" text=\"Kept\" style_bg_colr=\"0xff0000\"/></view></component>",
+            true, "Unknown attribute \"style_bg_colr\" on <lv_label>"
+        },
     };
     RUN_TABLE(table);
 
@@ -606,6 +612,56 @@ static void test_unknown_attribute_on_a_known_widget_warns(void)
     ASSERT_LABEL_TEXT(ASSERT_NAMED(root, "a"), "Kept");
 
     assert_engine_still_works("unknown attribute");
+}
+
+/**
+ * Two spellings that parse without error yet apply nothing: a ':' where the
+ * style selector separator '-' belongs, and a '-' in front of a const
+ * reference. Both warn, and neither applies a value, so the widget keeps what
+ * it had rather than a silently different state or a 0 offset. The colon form
+ * warns on an APPLICATION widget too, which the unknown-attribute check never
+ * covers, so it is asserted there separately.
+ */
+static void test_a_colon_style_selector_and_a_negated_const_warn(void)
+{
+    static const malformed_case_t table[] = {
+        {
+            "':' as the style selector separator",
+            "<component><view extends=\"lv_obj\" name=\"r\">"
+            "<lv_obj name=\"a\" style_bg_opa:checked=\"200\"/></view></component>",
+            true, "`style_bg_opa:checked` is ignored: style selectors follow '-'"
+        },
+        {
+            "negated const reference in an attribute",
+            "<component><consts><int name=\"gap\" value=\"12\"/></consts>"
+            "<view extends=\"lv_obj\" name=\"r\"><lv_obj name=\"a\" y=\"-#gap\"/></view></component>",
+            true, "`-#gap` in component"
+        },
+        {
+            "negated const reference in a style",
+            "<component><consts><int name=\"gap\" value=\"12\"/></consts>"
+            "<styles><style name=\"s\" translate_y=\"-#gap\"/></styles>"
+            "<view extends=\"lv_obj\" name=\"r\"/></component>",
+            true, "`-#gap` in style of component"
+        },
+    };
+    RUN_TABLE(table);
+
+    lv_obj_t * screen = helix_test_env_screen();
+    lv_obj_clean(screen);
+    lv_xml_component_unregister(SUBJECT_NAME);
+    ASSERT_XML_REGISTERS(SUBJECT_NAME,
+                         "<component><consts><int name=\"gap\" value=\"12\"/></consts>"
+                         "<view extends=\"lv_obj\" name=\"r\">"
+                         "<lv_obj name=\"a\" y=\"-#gap\" style_bg_opa=\"0\" style_bg_opa:checked=\"200\" "
+                         "checked=\"true\"/></view></component>");
+    lv_obj_t * a = ASSERT_NAMED(XML_CREATE(screen, SUBJECT_NAME, NULL), "a");
+    TEST_ASSERT_EQUAL_INT32_MESSAGE(0, lv_obj_get_style_y(a, LV_PART_MAIN),
+                                    "a negated const must not apply any offset");
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(0, lv_obj_get_style_bg_opa(a, LV_PART_MAIN),
+                                    "a ':' selector must not apply to any state");
+
+    assert_engine_still_works("colon selector / negated const");
 }
 
 /**
@@ -648,7 +704,8 @@ static const char * WIDE_GOOD_XML =
     "    <lv_slider name=\"sld\" value=\"40\" value-animated=\"true\" min_value=\"0\""
     "               max_value=\"100\" width=\"120\" clickable=\"true\"/>"
     "    <lv_bar name=\"bar\" bind_value=\"lvl\" style_bg_opa=\"128\" flex_grow=\"1\"/>"
-    "    <lv_button name=\"btn\" width=\"60\" height=\"30\" checked=\"true\">"
+    "    <lv_button name=\"btn\" width=\"60\" height=\"30\" checked=\"true\""
+    "               style_bg_opa-checked=\"200\" style_bg_color-indicator-pressed=\"0xff0000\">"
     "      <bind_flag_if_eq subject=\"on\" flag=\"hidden\" ref_value=\"0\"/>"
     "    </lv_button>"
     "    <lv_dropdown name=\"dd\" options=\"a\nb\" selected=\"1\" width=\"80\"/>"
@@ -1475,6 +1532,7 @@ int main(void)
     RUN_TEST(test_deeply_nested_elements_have_no_engine_limit_and_stay_usable);
     RUN_TEST(test_duplicate_sibling_names_are_accepted_and_the_first_one_wins);
     RUN_TEST(test_oversized_values_and_identifiers_stay_usable);
+    RUN_TEST(test_a_colon_style_selector_and_a_negated_const_warn);
     RUN_TEST(test_a_view_close_inside_a_comment_or_cdata_is_not_the_closing_tag);
     RUN_TEST(test_a_view_that_fails_to_parse_leaves_no_orphans_on_the_caller);
     RUN_TEST(test_structural_elements_missing_attributes_warn_and_expand_to_nothing);

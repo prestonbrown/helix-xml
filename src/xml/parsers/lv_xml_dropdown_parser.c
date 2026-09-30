@@ -88,6 +88,9 @@ void lv_xml_dropdown_apply(lv_xml_parser_state_t * state, const char ** attrs)
          * as the only writer, so a handler that vetoes a choice and restores the
          * previous one still reads the previous value rather than the new one. */
         else if(lv_streq("bind_selected", name)) {
+            /* Empty subject = intentional "no binding" (an optional subject left
+             * at its empty default, same convention as the obj parser's binds). */
+            if(value[0] == '\0') continue;
             lv_subject_t * subject = lv_xml_get_subject(&state->scope, value);
             if(subject) {
                 lv_subject_add_observer_obj(subject, dropdown_selected_observer_cb, item, NULL);

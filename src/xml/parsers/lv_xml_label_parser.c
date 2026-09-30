@@ -70,6 +70,10 @@ void lv_xml_label_apply(lv_xml_parser_state_t * state, const char ** attrs)
         else if(lv_streq("translation_tag", name)) lv_label_set_translation_tag(item, value);
 #endif
         else if(lv_streq("bind_text", name)) {
+            /* Empty subject = intentional "no binding" (an optional subject left
+             * at its empty default, same convention as the obj parser's binds).
+             * Skip silently so the static text stands. */
+            if(value[0] == '\0') continue;
             lv_subject_t * subject = lv_xml_get_subject(&state->scope, value);
             if(subject == NULL) {
                 LV_LOG_WARN("Subject \"%s\" doesn't exist in label bind_text", value);

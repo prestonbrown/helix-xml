@@ -137,6 +137,19 @@ lv_result_t lv_xml_unregister_subject(lv_xml_component_scope_t * scope, const ch
  */
 lv_subject_t * lv_xml_get_subject(lv_xml_component_scope_t * scope, const char * name);
 
+/**
+ * Find a subject by name without logging.
+ * Same lookup as lv_xml_get_subject(), but a miss is an expected outcome for
+ * existence probes (e.g. checking a name before registering it), so it returns
+ * NULL silently instead of warning.
+ * @param scope     If specified start searching in that component's subject list,
+ *                  and if not found search in the global space.
+ *                  If `NULL` search in global space immediately.
+ * @param name      Name of the subject to find.
+ * @return          Pointer to the subject or NULL if not found.
+ */
+lv_subject_t * lv_xml_find_subject(lv_xml_component_scope_t * scope, const char * name);
+
 lv_result_t lv_xml_register_const(lv_xml_component_scope_t * scope, const char * name, const char * value);
 
 /**

@@ -749,7 +749,7 @@ lv_result_t lv_xml_register_subject_owned(lv_xml_component_scope_t * scope, cons
     return register_subject_impl(scope, name, subject, true);
 }
 
-lv_subject_t * lv_xml_get_subject(lv_xml_component_scope_t * scope, const char * name)
+lv_subject_t * lv_xml_find_subject(lv_xml_component_scope_t * scope, const char * name)
 {
     lv_xml_subject_t * s;
     if(scope) {
@@ -766,8 +766,16 @@ lv_subject_t * lv_xml_get_subject(lv_xml_component_scope_t * scope, const char *
         }
     }
 
-    LV_LOG_WARN("No subject was found with name \"%s\".", name);
     return NULL;
+}
+
+lv_subject_t * lv_xml_get_subject(lv_xml_component_scope_t * scope, const char * name)
+{
+    lv_subject_t * subject = lv_xml_find_subject(scope, name);
+    if(subject == NULL) {
+        LV_LOG_WARN("No subject was found with name \"%s\".", name);
+    }
+    return subject;
 }
 
 lv_result_t lv_xml_unregister_subject(lv_xml_component_scope_t * scope, const char * name)

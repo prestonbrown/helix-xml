@@ -748,6 +748,24 @@ static void test_unregistering_a_component_returns_its_scope_memory_to_the_heap(
     }
 }
 
+/** Re-registering "globals" must not strand the previous `<view extends>` string. */
+static void test_reregistering_globals_returns_its_view_extends_to_the_heap(void)
+{
+    static const char * GLOBALS_XML = "<component><view extends=\"lv_obj\"/></component>";
+    size_t after_cycle[4];
+
+    for(int i = 0; i < 4; i++) {
+        ASSERT_XML_REGISTERS("globals", GLOBALS_XML);
+        after_cycle[i] = heap_free_size();
+    }
+
+    for(int i = 2; i < 4; i++) {
+        TEST_ASSERT_EQUAL_size_t_MESSAGE(
+            after_cycle[1], after_cycle[i],
+            helix_xml_assert_msgf("globals re-registration %d leaked heap", i));
+    }
+}
+
 /** After unregistering, the scope-owned subject's name is gone from the registry. */
 static void test_unregistering_a_component_removes_its_scope_owned_subject(void)
 {
@@ -1487,6 +1505,7 @@ int main(void)
     RUN_TEST(test_a_failed_re_registration_leaves_the_previous_definition_intact);
 
     RUN_TEST(test_unregistering_a_component_returns_its_scope_memory_to_the_heap);
+    RUN_TEST(test_reregistering_globals_returns_its_view_extends_to_the_heap);
     RUN_TEST(test_unregistering_a_component_removes_its_scope_owned_subject);
     RUN_TEST(test_unregistering_a_component_does_not_free_a_borrowed_subject);
     RUN_TEST(test_unregistering_with_a_live_instance_leaves_it_safe_to_delete);

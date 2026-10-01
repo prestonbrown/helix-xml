@@ -1730,6 +1730,8 @@ static void start_metadata_handler(void * user_data, const char * name, const ch
         const char * extends = lv_xml_get_value_of(attrs, "extends");
         if(extends == NULL) extends = "lv_obj";
 
+        /*A globals scope re-registered, or a second <view>, already owns an extends string.*/
+        lv_free((char *)state->scope.extends);
         state->scope.extends = lv_strdup(extends);
     }
 

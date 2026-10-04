@@ -872,9 +872,9 @@ static void test_literal_colors_are_authored_and_reapply_leaves_them(void)
 }
 
 /** A color reaching a view through a component `$prop` was resolved at the
- *  instance tag, so the engine cannot tell a token from a literal there: it is
- *  not claimed as authored, and stays the app's to theme. */
-static void test_a_color_passed_through_a_component_prop_is_not_authored(void)
+ *  instance tag, so its token name is lost: it is an authored literal, kept
+ *  from bulk recolor and never re-applied. */
+static void test_a_color_passed_through_a_component_prop_is_an_authored_literal(void)
 {
     TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_register_const(NULL, "tok_accent", "0xFF8800"));
     ASSERT_XML_REGISTERS("tint_box",
@@ -898,8 +898,12 @@ static void test_a_color_passed_through_a_component_prop_is_not_authored(void)
     lv_obj_t * lit_box = ASSERT_NAMED(ASSERT_NAMED(root, "via_literal"), "box");
     TEST_ASSERT_EQUAL_HEX32(0xFF8800, local_color(tok_box, LV_STYLE_BG_COLOR, LV_PART_MAIN));
     TEST_ASSERT_EQUAL_HEX32(0x123456, local_color(lit_box, LV_STYLE_BG_COLOR, LV_PART_MAIN));
-    TEST_ASSERT_FALSE(lv_xml_obj_has_authored_style(tok_box, LV_STYLE_BG_COLOR, LV_PART_MAIN));
-    TEST_ASSERT_FALSE(lv_xml_obj_has_authored_style(lit_box, LV_STYLE_BG_COLOR, LV_PART_MAIN));
+    TEST_ASSERT_TRUE(lv_xml_obj_has_authored_style(tok_box, LV_STYLE_BG_COLOR, LV_PART_MAIN));
+    TEST_ASSERT_TRUE(lv_xml_obj_has_authored_style(lit_box, LV_STYLE_BG_COLOR, LV_PART_MAIN));
+
+    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_set_const(NULL, "tok_accent", "0x00AA11"));
+    lv_xml_reapply_token_styles(root);
+    TEST_ASSERT_EQUAL_HEX32(0xFF8800, local_color(tok_box, LV_STYLE_BG_COLOR, LV_PART_MAIN));
 }
 
 /** Instance attributes reach the view root through a filtered copy of the
@@ -1035,6 +1039,42 @@ static void test_a_component_style_token_color_follows_a_const_change(void)
     lv_obj_add_state(b, LV_STATE_CHECKED);
     helix_test_pump(30);
     TEST_ASSERT_EQUAL_HEX32(0x00AA11, lv_color_to_int(lv_obj_get_style_bg_color(b, LV_PART_MAIN)));
+}
+
+/** Every report walks the whole display, so a pass reports once however many
+ *  styles it changed: a widget using two changed styles hears exactly what it
+ *  hears when one of them changes. */
+static void test_style_token_reapply_reports_once_however_many_styles_changed(void)
+{
+    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_register_const(NULL, "tok_a", "0xFF8800"));
+    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_register_const(NULL, "tok_b", "0xFF8800"));
+    ASSERT_XML_REGISTERS("tok_two_styles",
+                         "<component>"
+                         "  <styles>"
+                         "    <style name=\"s1\" bg_color=\"#tok_a\"/>"
+                         "    <style name=\"s2\" border_color=\"#tok_b\"/>"
+                         "  </styles>"
+                         "  <view extends=\"lv_obj\">"
+                         "    <lv_obj name=\"both\"><style name=\"s1\"/><style name=\"s2\"/></lv_obj>"
+                         "  </view>"
+                         "</component>");
+    lv_obj_t * root = XML_CREATE(helix_test_env_screen(), "tok_two_styles", NULL);
+    helix_test_pump(30);
+    lv_obj_t * both = ASSERT_NAMED(root, "both");
+    int style_changed = 0;
+    lv_obj_add_event_cb(both, count_style_changed_cb, LV_EVENT_STYLE_CHANGED, &style_changed);
+
+    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_set_const(NULL, "tok_a", "0x00AA11"));
+    lv_xml_reapply_style_tokens();
+    const int one_style = style_changed;
+    TEST_ASSERT_GREATER_THAN_INT(0, one_style);
+
+    style_changed = 0;
+    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_set_const(NULL, "tok_a", "0x2233CC"));
+    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_set_const(NULL, "tok_b", "0x2233CC"));
+    lv_xml_reapply_style_tokens();
+    TEST_ASSERT_EQUAL_INT(one_style, style_changed);
+    TEST_ASSERT_EQUAL_HEX32(0x2233CC, lv_color_to_int(lv_obj_get_style_border_color(both, LV_PART_MAIN)));
 }
 
 /** Re-registering a style (a hot reload) rewrites each property it names, so
@@ -2175,9 +2215,10 @@ int main(void)
     RUN_TEST(test_token_color_on_a_label_is_recorded_through_the_obj_apply_chain);
     RUN_TEST(test_a_later_inline_write_replaces_the_record);
     RUN_TEST(test_literal_colors_are_authored_and_reapply_leaves_them);
-    RUN_TEST(test_a_color_passed_through_a_component_prop_is_not_authored);
+    RUN_TEST(test_a_color_passed_through_a_component_prop_is_an_authored_literal);
     RUN_TEST(test_a_component_style_token_color_follows_a_const_change);
     RUN_TEST(test_re_registering_a_style_property_as_a_literal_drops_its_token);
+    RUN_TEST(test_style_token_reapply_reports_once_however_many_styles_changed);
     RUN_TEST(test_token_color_on_a_component_instance_tag_is_recorded_and_reapplied);
     RUN_TEST(test_many_props_sharing_one_token_on_one_element_all_record_and_reapply);
     RUN_TEST(test_a_component_local_const_shadowing_a_global_is_kept_as_a_literal);

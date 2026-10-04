@@ -1726,37 +1726,24 @@ static token_style_entry_t * token_style_entry(token_style_record_t * rec, lv_st
     return NULL;
 }
 
-/** Record the color apply_styles just wrote: a token or a literal is authored;
- *  a `$prop` value, whose origin was lost at the instance tag, is not. The
- *  latest inline write of a prop+selector decides, replacing or removing the
- *  entry. */
+/** Record the color apply_styles just wrote as authored: a global `#const`
+ *  with its name, anything else as a literal. The latest inline write of a
+ *  prop+selector replaces the entry. */
 static void token_style_note(lv_xml_parser_state_t * state, lv_obj_t * obj, const char * prop_name,
                              lv_style_selector_t selector, const char * value)
 {
     const char * const_name = NULL;
-    bool authored = true;
     for(uint8_t i = 0; state && i < state->token_count; i++) {
         if(state->token_values[i] == value) {
             const_name = state->token_names[i];
-            authored = const_name != NULL;
             break;
         }
     }
 
-    token_style_record_t * rec = token_style_find(obj);
-    if(rec == NULL && !authored) return;
-
     lv_style_prop_t prop = lv_xml_style_prop_to_enum(prop_name + 6);
     if(prop == LV_STYLE_PROP_INV) return;
+    token_style_record_t * rec = token_style_find(obj);
     token_style_entry_t * entry = token_style_entry(rec, prop, selector);
-
-    if(!authored) {
-        if(entry) {
-            lv_free(entry->const_name);
-            *entry = rec->entries[--rec->count];
-        }
-        return;
-    }
 
     lv_style_value_t applied;
     if(lv_obj_get_local_style_prop(obj, prop, &applied, selector) != LV_STYLE_RES_FOUND) return;

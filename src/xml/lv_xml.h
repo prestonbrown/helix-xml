@@ -174,8 +174,9 @@ const char * lv_xml_get_const_silent(lv_xml_component_scope_t * scope, const cha
  * property and selector: a global `#const` (e.g. `style_text_color="#warning"`)
  * or a literal (`"0x000000"`, `"#FFFFFF"`). Code that recolors widgets in bulk
  * should leave these alone. A later inline write of the same property and
- * selector replaces the entry. Only color properties are tracked. A color that
- * arrives through a component `$prop`, a named `<style>` or a direct LVGL call
+ * selector replaces the entry. Only color properties are tracked. A color
+ * passed through a component `$prop` counts as a literal (its token name is
+ * lost at the instance tag); one from a named `<style>` or a direct LVGL call
  * is not authored.
  * @param obj       the object to ask about
  * @param prop      e.g. `LV_STYLE_TEXT_COLOR`
@@ -196,8 +197,8 @@ void lv_xml_reapply_token_styles(lv_obj_t * root);
 
 /**
  * Re-resolve every global `#const` color in every registered `<style>` and
- * write the current value into the style, reporting each changed style once
- * so every widget using it refreshes. Literal style colors stay as written.
+ * write the current value into the style. When any style changed, one style
+ * change report refreshes every widget. Literal style colors stay as written.
  * Call it with lv_xml_reapply_token_styles() after changing consts.
  */
 void lv_xml_reapply_style_tokens(void);

@@ -1128,10 +1128,6 @@ static const char * get_param_default(lv_xml_component_scope_t * scope, const ch
     return NULL;
 }
 
-static bool is_hex_color(const char * str);
-static void note_style_value(lv_xml_parser_state_t * state, const char * attr_name, const char * value,
-                             const char * const_name);
-
 static void resolve_params(lv_xml_parser_state_t * state, lv_xml_component_scope_t * item_scope,
                            lv_xml_component_scope_t * parent_scope,
                            const char ** item_attrs, const char ** parent_attrs)
@@ -1234,10 +1230,6 @@ static void resolve_params(lv_xml_parser_state_t * state, lv_xml_component_scope
             }
             else if(ext_value) {
                 item_attrs[i + 1] = ext_value;
-                /*An unresolved `#name` default is left for resolve_consts to note.*/
-                if(ext_value[0] != '#' || is_hex_color(ext_value + 1)) {
-                    note_style_value(state, item_attrs[i], ext_value, NULL);
-                }
             }
             else {
                 /*Not set and no default value either
@@ -1269,27 +1261,22 @@ static bool is_hex_color(const char * str)
     return true;
 }
 
-/** Note where a `style_*` value came from, for apply_styles: `const_name` for a
- *  global const, NULL for a value substituted from a component `$prop`, whose
- *  origin (token or literal) was lost at the instance tag. A value with no note
- *  is a literal the author wrote. */
+/** Note which global const a `style_*` value came from, for apply_styles. A
+ *  value with no note is an authored literal, including one substituted from a
+ *  component `$prop`, whose token name was lost at the instance tag. */
 static void note_style_value(lv_xml_parser_state_t * state, const char * attr_name, const char * value,
                              const char * const_name)
 {
     if(state == NULL || lv_strncmp(attr_name, "style_", 6) != 0) return;
     /*Only a global const can be re-resolved later without the component scope;
      *a component-local one stays an authored literal.*/
-    if(const_name && lv_xml_get_const_silent(NULL, const_name) != value) return;
+    if(lv_xml_get_const_silent(NULL, const_name) != value) return;
     for(uint8_t i = 0; i < state->token_count; i++) {
-        if(state->token_values[i] == value) {
-            /*One pointer is one const value, whichever way it arrived.*/
-            if(const_name) state->token_names[i] = const_name;
-            return;
-        }
+        if(state->token_values[i] == value) return;
     }
     if(state->token_count >= LV_XML_TOKEN_SLOTS) {
-        LV_LOG_WARN("More than %d distinct #const or $prop style values on one element; `%s` is "
-                    "treated as a literal", LV_XML_TOKEN_SLOTS, attr_name);
+        LV_LOG_WARN("More than %d distinct #const style values on one element; `%s` is treated as "
+                    "a literal", LV_XML_TOKEN_SLOTS, attr_name);
         return;
     }
     state->token_values[state->token_count] = value;

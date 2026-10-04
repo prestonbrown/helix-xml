@@ -27,6 +27,13 @@ extern "C" {
  *      TYPEDEFS
  **********************/
 
+/** A style color property set from a global `#const`, kept so the style can
+ *  follow a const change (lv_xml_reapply_style_tokens). */
+typedef struct {
+    lv_style_prop_t prop;
+    char * const_name;
+} lv_xml_style_token_t;
+
 typedef struct _lv_xml_style_t {
     const char * name;
     const char * long_name;
@@ -38,6 +45,8 @@ typedef struct _lv_xml_style_t {
     lv_style_transition_dsc_t * trans_dsc;
     lv_style_prop_t * trans_props;
     uint32_t trans_authored_time;
+    lv_xml_style_token_t * tokens;
+    uint32_t token_cnt;
 } lv_xml_style_t;
 
 /**********************
@@ -58,6 +67,12 @@ lv_result_t lv_xml_register_style(lv_xml_component_scope_t * scope, const char *
  * @return              the style name or `NULL` on any error
  */
 const char * lv_xml_style_string_process(char * txt, lv_style_selector_t * selector);
+
+/**
+ * Free the `#const` records of a style (its lv_style_t is left as it is).
+ * @param xs    the style; NULL does nothing
+ */
+void lv_xml_style_tokens_clear(lv_xml_style_t * xs);
 
 /**
  * Find a style by name which was added by `lv_xml_register_style`

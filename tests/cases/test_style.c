@@ -990,6 +990,75 @@ static void test_a_component_local_const_shadowing_a_global_is_kept_as_a_literal
     TEST_ASSERT_EQUAL_HEX32(0x00FF00, local_color(shadowed, LV_STYLE_BG_COLOR, LV_PART_MAIN));
 }
 
+/** A named `<style>` resolves its `#const` values once, at registration; the
+ *  style-token pass rewrites them in the lv_style_t, so every widget using the
+ *  style follows a const change. A literal in the same style stays put. */
+static void count_style_changed_cb(lv_event_t * e)
+{
+    (*(int *)lv_event_get_user_data(e))++;
+}
+
+static void test_a_component_style_token_color_follows_a_const_change(void)
+{
+    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_register_const(NULL, "tok_accent", "0xFF8800"));
+    ASSERT_XML_REGISTERS("tok_styled",
+                         "<component>"
+                         "  <styles>"
+                         "    <style name=\"pill\" bg_color=\"#tok_accent\" border_color=\"0x123456\""
+                         "           text_color=\"#tok_accent\"/>"
+                         "  </styles>"
+                         "  <view extends=\"lv_obj\">"
+                         "    <lv_obj name=\"a\"><style name=\"pill\"/></lv_obj>"
+                         "    <lv_obj name=\"b\"><style name=\"pill\" selector=\"checked\"/></lv_obj>"
+                         "  </view>"
+                         "</component>");
+    lv_obj_t * root = XML_CREATE(helix_test_env_screen(), "tok_styled", NULL);
+    helix_test_pump(30);
+    lv_obj_t * a = ASSERT_NAMED(root, "a");
+    lv_obj_t * b = ASSERT_NAMED(root, "b");
+    TEST_ASSERT_EQUAL_HEX32(0xFF8800, lv_color_to_int(lv_obj_get_style_bg_color(a, LV_PART_MAIN)));
+    int style_changed = 0;
+    lv_obj_add_event_cb(a, count_style_changed_cb, LV_EVENT_STYLE_CHANGED, &style_changed);
+
+    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_set_const(NULL, "tok_accent", "0x00AA11"));
+    lv_xml_reapply_style_tokens();
+    helix_test_pump(30);
+    /*Widgets using the style are told, so they redraw; an unchanged style is not reported.*/
+    TEST_ASSERT_GREATER_THAN_INT(0, style_changed);
+    style_changed = 0;
+    lv_xml_reapply_style_tokens();
+    TEST_ASSERT_EQUAL_INT(0, style_changed);
+
+    TEST_ASSERT_EQUAL_HEX32(0x00AA11, lv_color_to_int(lv_obj_get_style_bg_color(a, LV_PART_MAIN)));
+    TEST_ASSERT_EQUAL_HEX32(0x00AA11, lv_color_to_int(lv_obj_get_style_text_color(a, LV_PART_MAIN)));
+    TEST_ASSERT_EQUAL_HEX32(0x123456, lv_color_to_int(lv_obj_get_style_border_color(a, LV_PART_MAIN)));
+    lv_obj_add_state(b, LV_STATE_CHECKED);
+    helix_test_pump(30);
+    TEST_ASSERT_EQUAL_HEX32(0x00AA11, lv_color_to_int(lv_obj_get_style_bg_color(b, LV_PART_MAIN)));
+}
+
+/** Re-registering a style (a hot reload) rewrites each property it names, so
+ *  a token that became a literal stops following the const. */
+static void test_re_registering_a_style_property_as_a_literal_drops_its_token(void)
+{
+    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_register_const(NULL, "tok_accent", "0xFF8800"));
+    const char * attrs1[] = {"name", "rereg", "bg_color", "#tok_accent", "text_color", "#tok_accent", NULL};
+    const char * attrs2[] = {"name", "rereg", "bg_color", "0x222222", NULL};
+    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_register_style(NULL, attrs1));
+    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_register_style(NULL, attrs2));
+    lv_xml_style_t * xs = lv_xml_get_style_by_name(NULL, "rereg");
+    TEST_ASSERT_NOT_NULL(xs);
+
+    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_set_const(NULL, "tok_accent", "0x00AA11"));
+    lv_xml_reapply_style_tokens();
+
+    lv_style_value_t v;
+    TEST_ASSERT_EQUAL_INT(LV_STYLE_RES_FOUND, lv_style_get_prop(&xs->style, LV_STYLE_BG_COLOR, &v));
+    TEST_ASSERT_EQUAL_HEX32(0x222222, lv_color_to_int(v.color));
+    TEST_ASSERT_EQUAL_INT(LV_STYLE_RES_FOUND, lv_style_get_prop(&xs->style, LV_STYLE_TEXT_COLOR, &v));
+    TEST_ASSERT_EQUAL_HEX32(0x00AA11, lv_color_to_int(v.color));
+}
+
 /*===========================================================================
  * The cascade
  *==========================================================================*/
@@ -2107,6 +2176,8 @@ int main(void)
     RUN_TEST(test_a_later_inline_write_replaces_the_record);
     RUN_TEST(test_literal_colors_are_authored_and_reapply_leaves_them);
     RUN_TEST(test_a_color_passed_through_a_component_prop_is_not_authored);
+    RUN_TEST(test_a_component_style_token_color_follows_a_const_change);
+    RUN_TEST(test_re_registering_a_style_property_as_a_literal_drops_its_token);
     RUN_TEST(test_token_color_on_a_component_instance_tag_is_recorded_and_reapplied);
     RUN_TEST(test_many_props_sharing_one_token_on_one_element_all_record_and_reapply);
     RUN_TEST(test_a_component_local_const_shadowing_a_global_is_kept_as_a_literal);

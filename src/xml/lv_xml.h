@@ -194,6 +194,14 @@ bool lv_xml_obj_has_authored_style(lv_obj_t * obj, lv_style_prop_t prop, lv_styl
  */
 void lv_xml_reapply_token_styles(lv_obj_t * root);
 
+/**
+ * Re-resolve every global `#const` color in every registered `<style>` and
+ * write the current value into the style, reporting each changed style once
+ * so every widget using it refreshes. Literal style colors stay as written.
+ * Call it with lv_xml_reapply_token_styles() after changing consts.
+ */
+void lv_xml_reapply_style_tokens(void);
+
 lv_result_t lv_xml_register_event_cb(lv_xml_component_scope_t * scope, const char * name, lv_event_cb_t cb);
 
 lv_event_cb_t lv_xml_get_event_cb(lv_xml_component_scope_t * scope, const char * name);

@@ -63,6 +63,7 @@ static void scope_instance_delete_cb(lv_event_t * e);
 static void scope_free_async_cb(void * scope_v);
 static void subject_expr_record_release(lv_xml_subject_expr_t * record);
 static void scope_retime_transitions(lv_ll_t * list);
+static void scope_reapply_style_tokens(lv_ll_t * list);
 static void component_scope_index_link(lv_xml_component_scope_t * scope);
 static void component_scope_index_unlink(lv_xml_component_scope_t * scope);
 
@@ -650,9 +651,41 @@ void lv_xml_set_transition_scale(uint32_t scale_256)
     scope_retime_transitions(&pending_free_scope_ll);
 }
 
+void lv_xml_reapply_style_tokens(void)
+{
+    /* Pending-free scopes can still back widgets on screen through a borrowed
+     * style, exactly as for retiming. */
+    scope_reapply_style_tokens(&component_scope_ll);
+    scope_reapply_style_tokens(&pending_free_scope_ll);
+}
+
 /**********************
  *   STATIC FUNCTIONS
  **********************/
+
+/** Rewrite every `#const` color of every style in every scope on `list` with
+ *  the const's current value, and report each style that changed once. */
+static void scope_reapply_style_tokens(lv_ll_t * list)
+{
+    lv_xml_component_scope_t * scope;
+    LV_LL_READ(list, scope) {
+        lv_xml_style_t * style;
+        LV_LL_READ(&scope->style_ll, style) {
+            bool changed = false;
+            for(uint32_t i = 0; i < style->token_cnt; i++) {
+                const char * value = lv_xml_get_const_silent(NULL, style->tokens[i].const_name);
+                if(value == NULL) continue;
+                lv_style_value_t next = { .color = lv_xml_to_color(value) };
+                lv_style_value_t cur;
+                if(lv_style_get_prop(&style->style, style->tokens[i].prop, &cur) == LV_STYLE_RES_FOUND &&
+                   lv_color_eq(cur.color, next.color)) continue;
+                lv_style_set_prop(&style->style, style->tokens[i].prop, next);
+                changed = true;
+            }
+            if(changed) lv_obj_report_style_change(&style->style);
+        }
+    }
+}
 
 /** Retime every style's transition in every scope on `list` from its authored
  *  duration, so repeated calls at different scales never compound. */
@@ -910,6 +943,7 @@ static void component_scope_free(lv_xml_component_scope_t * scope)
         lv_free((char *)style->name);
         lv_free((char *)style->long_name);
         lv_xml_style_transition_clear(style);
+        lv_xml_style_tokens_clear(style);
         lv_style_reset(&style->style);
     }
     lv_ll_clear(&scope->style_ll);

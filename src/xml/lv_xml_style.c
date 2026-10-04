@@ -35,6 +35,7 @@
  **********************/
 
 static lv_anim_path_cb_t transition_easing_to_cb(const char * txt);
+static void style_token_note(lv_xml_style_t * xs, const char * prop_name, const char * const_name);
 static bool transition_time_to_ms(const char * txt, const char * style_name,
                                   const char * attr_name, uint32_t * out_ms);
 static void style_transition_install(lv_xml_style_t * xs, const char * props_str,
@@ -146,11 +147,16 @@ lv_result_t lv_xml_register_style(lv_xml_component_scope_t * scope, const char *
             continue;
         }
 
+        const char * token_name = NULL;
         if(value[0] == '#') {
             const char * value_clean = &value[1];
             /* The component's consts first, then globals (indexed). */
             const char * const_value = lv_xml_get_const_silent(scope, value_clean);
             if(const_value) value = const_value;
+            /*Only a global const can be re-resolved later by name.*/
+            if(const_value && lv_xml_get_const_silent(NULL, value_clean) == const_value) {
+                token_name = value_clean;
+            }
             if(!const_value) {
                 LV_LOG_WARN("Unknown const `#%s` in style of component `%s` (property `%s`) - "
                             "property skipped",
@@ -159,6 +165,11 @@ lv_result_t lv_xml_register_style(lv_xml_component_scope_t * scope, const char *
                             name);
                 continue;
             }
+        }
+
+        size_t name_len = lv_strlen(name);
+        if(name_len > 5 && lv_memcmp(name + name_len - 5, "color", 5) == 0) {
+            style_token_note(xml_style, name, token_name);
         }
 
         if(lv_streq(value, "remove")) {
@@ -538,9 +549,58 @@ void lv_xml_style_transition_clear(lv_xml_style_t * xs)
     xs->trans_authored_time = 0;
 }
 
+void lv_xml_style_tokens_clear(lv_xml_style_t * xs)
+{
+    if(xs == NULL) return;
+    for(uint32_t i = 0; i < xs->token_cnt; i++) lv_free(xs->tokens[i].const_name);
+    lv_free(xs->tokens);
+    xs->tokens = NULL;
+    xs->token_cnt = 0;
+}
+
 /**********************
  *   STATIC FUNCTIONS
  **********************/
+
+/** The latest write of a color property decides: a global `#const` replaces
+ *  its record, anything else removes it. */
+static void style_token_note(lv_xml_style_t * xs, const char * prop_name, const char * const_name)
+{
+    lv_style_prop_t prop = lv_xml_style_prop_to_enum(prop_name);
+    if(prop == LV_STYLE_PROP_INV) return;
+
+    lv_xml_style_token_t * t = NULL;
+    for(uint32_t i = 0; i < xs->token_cnt; i++) {
+        if(xs->tokens[i].prop == prop) {
+            t = &xs->tokens[i];
+            break;
+        }
+    }
+
+    if(const_name == NULL) {
+        if(t) {
+            lv_free(t->const_name);
+            *t = xs->tokens[--xs->token_cnt];
+        }
+        return;
+    }
+
+    char * name_copy = lv_strdup(const_name);
+    if(name_copy == NULL) return;
+    if(t == NULL) {
+        lv_xml_style_token_t * grown = lv_realloc(xs->tokens, (xs->token_cnt + 1) * sizeof(*grown));
+        if(grown == NULL) {
+            lv_free(name_copy);
+            return;
+        }
+        xs->tokens = grown;
+        t = &xs->tokens[xs->token_cnt++];
+        t->prop = prop;
+        t->const_name = NULL;
+    }
+    lv_free(t->const_name);
+    t->const_name = name_copy;
+}
 
 static lv_anim_path_cb_t transition_easing_to_cb(const char * txt)
 {

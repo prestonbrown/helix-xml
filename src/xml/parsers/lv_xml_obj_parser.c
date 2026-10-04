@@ -38,7 +38,8 @@ typedef struct {
     const char * screen_name;
 } screen_load_anim_dsc_t;
 
-/** One inline color written from a `#const`, and the color that write produced. */
+/** One inline color the XML author wrote, and the color that write produced.
+ *  `const_name` is the global const it came from, or NULL for a literal. */
 typedef struct {
     lv_style_prop_t prop;
     lv_style_selector_t selector;
@@ -1725,28 +1726,31 @@ static token_style_entry_t * token_style_entry(token_style_record_t * rec, lv_st
     return NULL;
 }
 
-/** Record (or forget) the const behind a color apply_styles just wrote. The
- *  latest inline write of a prop+selector decides: a token replaces the entry,
- *  anything else removes it. Allocates only when a token is recorded. */
+/** Record the color apply_styles just wrote: a token or a literal is authored;
+ *  a `$prop` value, whose origin was lost at the instance tag, is not. The
+ *  latest inline write of a prop+selector decides, replacing or removing the
+ *  entry. */
 static void token_style_note(lv_xml_parser_state_t * state, lv_obj_t * obj, const char * prop_name,
                              lv_style_selector_t selector, const char * value)
 {
     const char * const_name = NULL;
+    bool authored = true;
     for(uint8_t i = 0; state && i < state->token_count; i++) {
         if(state->token_values[i] == value) {
             const_name = state->token_names[i];
+            authored = const_name != NULL;
             break;
         }
     }
 
     token_style_record_t * rec = token_style_find(obj);
-    if(rec == NULL && const_name == NULL) return;
+    if(rec == NULL && !authored) return;
 
     lv_style_prop_t prop = lv_xml_style_prop_to_enum(prop_name + 6);
     if(prop == LV_STYLE_PROP_INV) return;
     token_style_entry_t * entry = token_style_entry(rec, prop, selector);
 
-    if(const_name == NULL) {
+    if(!authored) {
         if(entry) {
             lv_free(entry->const_name);
             *entry = rec->entries[--rec->count];
@@ -1757,8 +1761,11 @@ static void token_style_note(lv_xml_parser_state_t * state, lv_obj_t * obj, cons
     lv_style_value_t applied;
     if(lv_obj_get_local_style_prop(obj, prop, &applied, selector) != LV_STYLE_RES_FOUND) return;
 
-    char * name_copy = lv_strdup(const_name);
-    if(name_copy == NULL) return;
+    char * name_copy = NULL;
+    if(const_name) {
+        name_copy = lv_strdup(const_name);
+        if(name_copy == NULL) return;
+    }
 
     if(rec == NULL) {
         rec = lv_malloc_zeroed(sizeof(token_style_record_t));
@@ -1786,7 +1793,7 @@ static void token_style_note(lv_xml_parser_state_t * state, lv_obj_t * obj, cons
     entry->last_applied = applied.color;
 }
 
-bool lv_xml_obj_has_token_style(lv_obj_t * obj, lv_style_prop_t prop, lv_style_selector_t selector)
+bool lv_xml_obj_has_authored_style(lv_obj_t * obj, lv_style_prop_t prop, lv_style_selector_t selector)
 {
     if(obj == NULL) return false;
     return token_style_entry(token_style_find(obj), prop, selector) != NULL;
@@ -1800,6 +1807,7 @@ static lv_obj_tree_walk_res_t token_style_reapply_cb(lv_obj_t * obj, void * user
 
     for(uint32_t i = 0; i < rec->count; i++) {
         token_style_entry_t * e = &rec->entries[i];
+        if(e->const_name == NULL) continue; /*a literal*/
         /*A color C++ wrote since (an error state, a selection highlight) is not ours to replace.*/
         lv_style_value_t current;
         if(lv_obj_get_local_style_prop(obj, e->prop, &current, e->selector) != LV_STYLE_RES_FOUND) continue;

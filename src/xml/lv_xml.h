@@ -170,22 +170,23 @@ const char * lv_xml_get_const(lv_xml_component_scope_t * scope, const char * nam
 const char * lv_xml_get_const_silent(lv_xml_component_scope_t * scope, const char * name);
 
 /**
- * Whether an inline `style_*` color on `obj` was written from a global `#const`
- * (e.g. `style_text_color="#warning"`) and is still tracked as that const.
- * A later inline write of the same property and selector replaces the record,
- * and a non-const write removes it. Only color properties are tracked; consts
- * reached through a component `$prop`, named `<style>`s and component-local
- * consts are not.
+ * Whether the XML author wrote the inline `style_*` color on `obj` for this
+ * property and selector: a global `#const` (e.g. `style_text_color="#warning"`)
+ * or a literal (`"0x000000"`, `"#FFFFFF"`). Code that recolors widgets in bulk
+ * should leave these alone. A later inline write of the same property and
+ * selector replaces the entry. Only color properties are tracked. A color that
+ * arrives through a component `$prop`, a named `<style>` or a direct LVGL call
+ * is not authored.
  * @param obj       the object to ask about
  * @param prop      e.g. `LV_STYLE_TEXT_COLOR`
  * @param selector  the exact selector the attribute named, e.g. `LV_PART_MAIN | LV_STATE_CHECKED`
- * @return          true if that property+selector follows a const
+ * @return          true if that property+selector carries an authored color
  */
-bool lv_xml_obj_has_token_style(lv_obj_t * obj, lv_style_prop_t prop, lv_style_selector_t selector);
+bool lv_xml_obj_has_authored_style(lv_obj_t * obj, lv_style_prop_t prop, lv_style_selector_t selector);
 
 /**
- * Re-resolve every tracked `#const` color in `root`'s tree (root included) and
- * write the current value of its const. A color whose local value no longer
+ * Re-resolve every authored `#const` color in `root`'s tree (root included) and
+ * write the current value of its const; authored literals are left as written. A color whose local value no longer
  * equals what the const last wrote was changed by other code since, and is left
  * alone. Call it after changing consts with lv_xml_set_const(), e.g. on a theme
  * switch.

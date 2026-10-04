@@ -1128,6 +1128,10 @@ static const char * get_param_default(lv_xml_component_scope_t * scope, const ch
     return NULL;
 }
 
+static bool is_hex_color(const char * str);
+static void note_style_value(lv_xml_parser_state_t * state, const char * attr_name, const char * value,
+                             const char * const_name);
+
 static void resolve_params(lv_xml_parser_state_t * state, lv_xml_component_scope_t * item_scope,
                            lv_xml_component_scope_t * parent_scope,
                            const char ** item_attrs, const char ** parent_attrs)
@@ -1230,6 +1234,10 @@ static void resolve_params(lv_xml_parser_state_t * state, lv_xml_component_scope
             }
             else if(ext_value) {
                 item_attrs[i + 1] = ext_value;
+                /*An unresolved `#name` default is left for resolve_consts to note.*/
+                if(ext_value[0] != '#' || is_hex_color(ext_value + 1)) {
+                    note_style_value(state, item_attrs[i], ext_value, NULL);
+                }
             }
             else {
                 /*Not set and no default value either
@@ -1261,19 +1269,27 @@ static bool is_hex_color(const char * str)
     return true;
 }
 
-/** Remember which global const a `style_*` value came from, for apply_styles. */
-static void note_style_token(lv_xml_parser_state_t * state, const char * attr_name, const char * value,
+/** Note where a `style_*` value came from, for apply_styles: `const_name` for a
+ *  global const, NULL for a value substituted from a component `$prop`, whose
+ *  origin (token or literal) was lost at the instance tag. A value with no note
+ *  is a literal the author wrote. */
+static void note_style_value(lv_xml_parser_state_t * state, const char * attr_name, const char * value,
                              const char * const_name)
 {
     if(state == NULL || lv_strncmp(attr_name, "style_", 6) != 0) return;
-    /*Only a global const can be re-resolved later without the component scope.*/
-    if(lv_xml_get_const_silent(NULL, const_name) != value) return;
+    /*Only a global const can be re-resolved later without the component scope;
+     *a component-local one stays an authored literal.*/
+    if(const_name && lv_xml_get_const_silent(NULL, const_name) != value) return;
     for(uint8_t i = 0; i < state->token_count; i++) {
-        if(state->token_values[i] == value) return;
+        if(state->token_values[i] == value) {
+            /*One pointer is one const value, whichever way it arrived.*/
+            if(const_name) state->token_names[i] = const_name;
+            return;
+        }
     }
     if(state->token_count >= LV_XML_TOKEN_SLOTS) {
-        LV_LOG_WARN("More than %d distinct #const style values on one element; `%s` will not follow a "
-                    "const change", LV_XML_TOKEN_SLOTS, attr_name);
+        LV_LOG_WARN("More than %d distinct #const or $prop style values on one element; `%s` is "
+                    "treated as a literal", LV_XML_TOKEN_SLOTS, attr_name);
         return;
     }
     state->token_values[state->token_count] = value;
@@ -1284,8 +1300,6 @@ static void note_style_token(lv_xml_parser_state_t * state, const char * attr_na
 static void resolve_consts(lv_xml_parser_state_t * state, const char ** item_attrs,
                            lv_xml_component_scope_t * scope)
 {
-    if(state) state->token_count = 0;
-
     uint32_t i;
     for(i = 0; item_attrs[i]; i += 2) {
         const char * name = item_attrs[i];
@@ -1315,7 +1329,7 @@ static void resolve_consts(lv_xml_parser_state_t * state, const char ** item_att
             const char * const_value = lv_xml_get_const_silent(scope, value_clean);
             if(const_value) {
                 item_attrs[i + 1] = const_value;
-                note_style_token(state, name, const_value, value_clean);
+                note_style_value(state, name, const_value, value_clean);
             }
             /*Unknown const: drop the attribute so the widget keeps its default,
              *but say WHERE it was, or the message cannot be acted on in a tree
@@ -2384,6 +2398,7 @@ static void view_start_element_handler(void * user_data, const char * name, cons
      *E.g. in `my_button` `<lv_label x="5" text="${title}".
      *This function changes the pointers in the child attributes if the start with '$'
      *with the corresponding parameter. E.g. "text", "${title}" -> "text", "Hello" */
+    state->token_count = 0;
     resolve_params(state, &state->scope, state->parent_scope, attrs, state->parent_attrs);
 
     resolve_consts(state, attrs, &state->scope);

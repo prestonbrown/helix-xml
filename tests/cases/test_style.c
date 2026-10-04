@@ -50,6 +50,7 @@
 
 #include "xml/lv_xml_base_types.h"
 #include "xml/lv_xml_component_private.h"
+#include "xml/lv_xml_parser.h"
 #include "xml/lv_xml_style.h"
 
 /*---------------------------------------------------------------------------
@@ -832,6 +833,89 @@ static void test_a_later_inline_write_replaces_or_removes_the_record(void)
     lv_xml_reapply_token_styles(root);
     TEST_ASSERT_EQUAL_HEX32(0x111111, local_color(to_hex, LV_STYLE_BG_COLOR, LV_PART_MAIN));
     TEST_ASSERT_EQUAL_HEX32(0x2233CC, local_color(to_other, LV_STYLE_BG_COLOR, LV_PART_MAIN));
+}
+
+/** Instance attributes reach the view root through a filtered copy of the
+ *  attribute array, so the token is matched by value, not by array slot. */
+static void test_token_color_on_a_component_instance_tag_is_recorded_and_reapplied(void)
+{
+    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_register_const(NULL, "tok_accent", "0xFF8800"));
+    ASSERT_XML_REGISTERS("tok_child", "<component><view extends=\"lv_obj\"/></component>");
+    ASSERT_XML_REGISTERS("tok_parent",
+                         "<component>"
+                         "  <view extends=\"lv_obj\">"
+                         "    <tok_child name=\"inst\" width=\"40\" style_bg_color=\"#tok_accent\"/>"
+                         "  </view>"
+                         "</component>");
+    lv_obj_t * root = XML_CREATE(helix_test_env_screen(), "tok_parent", NULL);
+    helix_test_pump(30);
+
+    lv_obj_t * inst = ASSERT_NAMED(root, "inst");
+    TEST_ASSERT_TRUE(lv_xml_obj_has_token_style(inst, LV_STYLE_BG_COLOR, LV_PART_MAIN));
+
+    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_set_const(NULL, "tok_accent", "0x00AA11"));
+    lv_xml_reapply_token_styles(root);
+    TEST_ASSERT_EQUAL_HEX32(0x00AA11, local_color(inst, LV_STYLE_BG_COLOR, LV_PART_MAIN));
+}
+
+/** One const resolves to one value pointer, so every prop naming it on an
+ *  element shares one side-table slot, and a distinct token after more shared
+ *  props than there are slots still finds a slot of its own. */
+static void test_many_props_sharing_one_token_on_one_element_all_record_and_reapply(void)
+{
+    static const lv_style_prop_t props[] = {
+        LV_STYLE_TEXT_COLOR, LV_STYLE_BG_COLOR, LV_STYLE_BG_GRAD_COLOR, LV_STYLE_BORDER_COLOR,
+        LV_STYLE_OUTLINE_COLOR, LV_STYLE_SHADOW_COLOR, LV_STYLE_IMAGE_RECOLOR, LV_STYLE_LINE_COLOR,
+        LV_STYLE_ARC_COLOR, LV_STYLE_RECOLOR,
+    };
+    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_register_const(NULL, "tok_accent", "0xFF8800"));
+    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_register_const(NULL, "tok_other", "0x0000FF"));
+    ASSERT_XML_REGISTERS("tok_shared",
+                         "<component>"
+                         "  <view extends=\"lv_obj\">"
+                         "    <lv_obj name=\"many\" style_text_color=\"#tok_accent\" style_bg_color=\"#tok_accent\""
+                         "     style_bg_grad_color=\"#tok_accent\" style_border_color=\"#tok_accent\""
+                         "     style_outline_color=\"#tok_accent\" style_shadow_color=\"#tok_accent\""
+                         "     style_image_recolor=\"#tok_accent\" style_line_color=\"#tok_accent\""
+                         "     style_arc_color=\"#tok_accent\" style_recolor=\"#tok_other\"/>"
+                         "  </view>"
+                         "</component>");
+    /*Every prop but the last shares tok_accent; the last names tok_other.*/
+    const size_t n = sizeof(props) / sizeof(props[0]);
+    TEST_ASSERT_GREATER_THAN_INT(LV_XML_TOKEN_SLOTS, (int)(n - 1));
+    lv_obj_t * root = XML_CREATE(helix_test_env_screen(), "tok_shared", NULL);
+    helix_test_pump(30);
+    lv_obj_t * many = ASSERT_NAMED(root, "many");
+
+    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_set_const(NULL, "tok_accent", "0x00AA11"));
+    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_set_const(NULL, "tok_other", "0x00AA11"));
+    lv_xml_reapply_token_styles(root);
+    for(size_t i = 0; i < n; i++) {
+        TEST_ASSERT_TRUE_MESSAGE(lv_xml_obj_has_token_style(many, props[i], LV_PART_MAIN),
+                                 helix_xml_assert_msgf("prop #%u not recorded", (unsigned)i));
+        TEST_ASSERT_EQUAL_HEX32_MESSAGE(0x00AA11, local_color(many, props[i], LV_PART_MAIN),
+                                        helix_xml_assert_msgf("prop #%u not re-applied", (unsigned)i));
+    }
+}
+
+/** Re-apply resolves by name in the global scope, so a component-local const
+ *  that shadows a global would come back as the global's value: not recorded. */
+static void test_a_component_local_const_shadowing_a_global_is_not_recorded(void)
+{
+    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_register_const(NULL, "tok_accent", "0xFF8800"));
+    ASSERT_XML_REGISTERS("tok_local",
+                         "<component>"
+                         "  <consts><const name=\"tok_accent\" value=\"0x00FF00\"/></consts>"
+                         "  <view extends=\"lv_obj\">"
+                         "    <lv_obj name=\"shadowed\" style_bg_color=\"#tok_accent\"/>"
+                         "  </view>"
+                         "</component>");
+    lv_obj_t * root = XML_CREATE(helix_test_env_screen(), "tok_local", NULL);
+    helix_test_pump(30);
+
+    lv_obj_t * shadowed = ASSERT_NAMED(root, "shadowed");
+    TEST_ASSERT_EQUAL_HEX32(0x00FF00, local_color(shadowed, LV_STYLE_BG_COLOR, LV_PART_MAIN));
+    TEST_ASSERT_FALSE(lv_xml_obj_has_token_style(shadowed, LV_STYLE_BG_COLOR, LV_PART_MAIN));
 }
 
 /*===========================================================================
@@ -1949,6 +2033,9 @@ int main(void)
     RUN_TEST(test_token_color_record_is_freed_with_its_object);
     RUN_TEST(test_token_color_on_a_label_is_recorded_through_the_obj_apply_chain);
     RUN_TEST(test_a_later_inline_write_replaces_or_removes_the_record);
+    RUN_TEST(test_token_color_on_a_component_instance_tag_is_recorded_and_reapplied);
+    RUN_TEST(test_many_props_sharing_one_token_on_one_element_all_record_and_reapply);
+    RUN_TEST(test_a_component_local_const_shadowing_a_global_is_not_recorded);
 
     RUN_TEST(test_inline_style_attribute_outranks_a_style_element);
     RUN_TEST(test_inline_style_attribute_outranks_a_bound_style);

@@ -63,6 +63,7 @@ Features added here that upstream's engine does not have:
 | Inline element text | `<label>Hello</label>` sets `text` and synthesizes a translation tag |
 | `float` and `color` subjects | Upstream supports only `int` and `string` |
 | `<subject name= type= value=>` | Single-tag subject declarations (upstream's tag-per-type form also parses) |
+| Token-tracked inline colors | `style_text_color="#warning"` remembers the global const; `lv_xml_reapply_token_styles()` re-resolves it after `lv_xml_set_const()`, skipping colors other code has changed since |
 
 Full reference for the reactive surface — subjects, every binding element, the
 expression language, `<if>`/`<repeat>`, and the two rules below in context — is

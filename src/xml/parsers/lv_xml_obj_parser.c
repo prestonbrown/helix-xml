@@ -38,6 +38,19 @@ typedef struct {
     const char * screen_name;
 } screen_load_anim_dsc_t;
 
+/** One inline color written from a `#const`, and the color that write produced. */
+typedef struct {
+    lv_style_prop_t prop;
+    lv_style_selector_t selector;
+    lv_color_t last_applied;
+    char * const_name;
+} token_style_entry_t;
+
+typedef struct {
+    token_style_entry_t * entries;
+    uint32_t count;
+} token_style_record_t;
+
 typedef struct {
     const char * timeline_name;
     const char * target_name;
@@ -51,6 +64,8 @@ typedef struct {
  **********************/
 static lv_obj_flag_t flag_to_enum(const char * txt);
 static bool apply_styles(lv_xml_parser_state_t * state, lv_obj_t * obj, const char * name, const char * value);
+static void token_style_note(lv_xml_parser_state_t * state, lv_obj_t * obj, const char * prop_name,
+                             lv_style_selector_t selector, const char * value);
 static void screen_create_on_trigger_event_cb(lv_event_t * e);
 static void screen_load_on_trigger_event_cb(lv_event_t * e);
 static void delete_on_screen_unloaded_event_cb(lv_event_t * e);
@@ -1668,7 +1683,143 @@ static bool apply_styles(lv_xml_parser_state_t * state, lv_obj_t * obj, const ch
     }
     else return false;
 
+    size_t prop_len = lv_strlen(prop_name);
+    if(prop_len > 5 && lv_memcmp(prop_name + prop_len - 5, "color", 5) == 0) {
+        token_style_note(state, obj, prop_name, selector, value);
+    }
+
     return true;
+}
+
+/*======================
+ *   Token styles
+ *=====================*/
+
+static void token_style_delete_event_cb(lv_event_t * e)
+{
+    token_style_record_t * rec = lv_event_get_user_data(e);
+    for(uint32_t i = 0; i < rec->count; i++) lv_free(rec->entries[i].const_name);
+    lv_free(rec->entries);
+    lv_free(rec);
+}
+
+/** The record lives as the user_data of its own LV_EVENT_DELETE callback, so it
+ *  is found on the object and freed with it; there is no registry. */
+static token_style_record_t * token_style_find(lv_obj_t * obj)
+{
+    uint32_t count = lv_obj_get_event_count(obj);
+    for(uint32_t i = 0; i < count; i++) {
+        lv_event_dsc_t * dsc = lv_obj_get_event_dsc(obj, i);
+        if(lv_event_dsc_get_cb(dsc) == token_style_delete_event_cb) return lv_event_dsc_get_user_data(dsc);
+    }
+    return NULL;
+}
+
+static token_style_entry_t * token_style_entry(token_style_record_t * rec, lv_style_prop_t prop,
+                                               lv_style_selector_t selector)
+{
+    if(rec == NULL) return NULL;
+    for(uint32_t i = 0; i < rec->count; i++) {
+        if(rec->entries[i].prop == prop && rec->entries[i].selector == selector) return &rec->entries[i];
+    }
+    return NULL;
+}
+
+/** Record (or forget) the const behind a color apply_styles just wrote. The
+ *  latest inline write of a prop+selector decides: a token replaces the entry,
+ *  anything else removes it. Allocates only when a token is recorded. */
+static void token_style_note(lv_xml_parser_state_t * state, lv_obj_t * obj, const char * prop_name,
+                             lv_style_selector_t selector, const char * value)
+{
+    const char * const_name = NULL;
+    for(uint8_t i = 0; state && i < state->token_count; i++) {
+        if(state->token_values[i] == value) {
+            const_name = state->token_names[i];
+            break;
+        }
+    }
+
+    token_style_record_t * rec = token_style_find(obj);
+    if(rec == NULL && const_name == NULL) return;
+
+    lv_style_prop_t prop = lv_xml_style_prop_to_enum(prop_name + 6);
+    if(prop == LV_STYLE_PROP_INV) return;
+    token_style_entry_t * entry = token_style_entry(rec, prop, selector);
+
+    if(const_name == NULL) {
+        if(entry) {
+            lv_free(entry->const_name);
+            *entry = rec->entries[--rec->count];
+        }
+        return;
+    }
+
+    lv_style_value_t applied;
+    if(lv_obj_get_local_style_prop(obj, prop, &applied, selector) != LV_STYLE_RES_FOUND) return;
+
+    char * name_copy = lv_strdup(const_name);
+    if(name_copy == NULL) return;
+
+    if(rec == NULL) {
+        rec = lv_malloc_zeroed(sizeof(token_style_record_t));
+        if(rec == NULL) {
+            lv_free(name_copy);
+            return;
+        }
+        lv_obj_add_event_cb(obj, token_style_delete_event_cb, LV_EVENT_DELETE, rec);
+    }
+
+    if(entry == NULL) {
+        token_style_entry_t * grown = lv_realloc(rec->entries, (rec->count + 1) * sizeof(token_style_entry_t));
+        if(grown == NULL) {
+            lv_free(name_copy);
+            return;
+        }
+        rec->entries = grown;
+        entry = &rec->entries[rec->count++];
+        entry->prop = prop;
+        entry->selector = selector;
+        entry->const_name = NULL;
+    }
+    lv_free(entry->const_name);
+    entry->const_name = name_copy;
+    entry->last_applied = applied.color;
+}
+
+bool lv_xml_obj_has_token_style(lv_obj_t * obj, lv_style_prop_t prop, lv_style_selector_t selector)
+{
+    if(obj == NULL) return false;
+    return token_style_entry(token_style_find(obj), prop, selector) != NULL;
+}
+
+static lv_obj_tree_walk_res_t token_style_reapply_cb(lv_obj_t * obj, void * user_data)
+{
+    LV_UNUSED(user_data);
+    token_style_record_t * rec = token_style_find(obj);
+    if(rec == NULL) return LV_OBJ_TREE_WALK_NEXT;
+
+    for(uint32_t i = 0; i < rec->count; i++) {
+        token_style_entry_t * e = &rec->entries[i];
+        /*A color C++ wrote since (an error state, a selection highlight) is not ours to replace.*/
+        lv_style_value_t current;
+        if(lv_obj_get_local_style_prop(obj, e->prop, &current, e->selector) != LV_STYLE_RES_FOUND) continue;
+        if(!lv_color_eq(current.color, e->last_applied)) continue;
+
+        const char * value = lv_xml_get_const_silent(NULL, e->const_name);
+        if(value == NULL) continue;
+        lv_style_value_t next = { .color = lv_xml_to_color(value) };
+        if(lv_color_eq(next.color, e->last_applied)) continue;
+
+        lv_obj_set_local_style_prop(obj, e->prop, next, e->selector);
+        e->last_applied = next.color;
+    }
+    return LV_OBJ_TREE_WALK_NEXT;
+}
+
+void lv_xml_reapply_token_styles(lv_obj_t * root)
+{
+    if(root == NULL) return;
+    lv_obj_tree_walk(root, token_style_reapply_cb, NULL);
 }
 
 

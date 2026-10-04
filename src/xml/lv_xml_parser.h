@@ -33,6 +33,9 @@ extern "C" {
  *  skipped entirely - see lv_xml_attr_check_begin(). */
 #define LV_XML_ATTR_CHECK_MAX 128
 
+/** Most distinct `#const` style values one element can record as token styles. */
+#define LV_XML_TOKEN_SLOTS 8
+
 /**********************
  *      TYPEDEFS
  **********************/
@@ -143,6 +146,14 @@ struct _lv_xml_parser_state_t {
     uint8_t attr_check_participants;  /**< chains that promised to report misses */
     uint8_t attr_check_miss[LV_XML_ATTR_CHECK_MAX];
     uint8_t attr_check_handled[LV_XML_ATTR_CHECK_MAX];
+    /* `style_*` attributes of the current element that resolve_consts rewrote
+     * from a global `#const`: the resolved value pointer and the const name.
+     * apply_styles matches a value by pointer to learn which const it came
+     * from (see lv_xml_reapply_token_styles). Both are borrowed for the
+     * duration of the element; reset by the element start handler. */
+    const char * token_values[LV_XML_TOKEN_SLOTS];
+    const char * token_names[LV_XML_TOKEN_SLOTS];
+    uint8_t token_count;
 };
 
 /**********************

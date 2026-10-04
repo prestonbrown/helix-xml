@@ -1261,8 +1261,31 @@ static bool is_hex_color(const char * str)
     return true;
 }
 
-static void resolve_consts(const char ** item_attrs, lv_xml_component_scope_t * scope)
+/** Remember which global const a `style_*` value came from, for apply_styles. */
+static void note_style_token(lv_xml_parser_state_t * state, const char * attr_name, const char * value,
+                             const char * const_name)
 {
+    if(state == NULL || lv_strncmp(attr_name, "style_", 6) != 0) return;
+    /*Only a global const can be re-resolved later without the component scope.*/
+    if(lv_xml_get_const_silent(NULL, const_name) != value) return;
+    for(uint8_t i = 0; i < state->token_count; i++) {
+        if(state->token_values[i] == value) return;
+    }
+    if(state->token_count >= LV_XML_TOKEN_SLOTS) {
+        LV_LOG_WARN("More than %d distinct #const style values on one element; `%s` will not follow a "
+                    "const change", LV_XML_TOKEN_SLOTS, attr_name);
+        return;
+    }
+    state->token_values[state->token_count] = value;
+    state->token_names[state->token_count] = const_name;
+    state->token_count++;
+}
+
+static void resolve_consts(lv_xml_parser_state_t * state, const char ** item_attrs,
+                           lv_xml_component_scope_t * scope)
+{
+    if(state) state->token_count = 0;
+
     uint32_t i;
     for(i = 0; item_attrs[i]; i += 2) {
         const char * name = item_attrs[i];
@@ -1292,6 +1315,7 @@ static void resolve_consts(const char ** item_attrs, lv_xml_component_scope_t * 
             const char * const_value = lv_xml_get_const_silent(scope, value_clean);
             if(const_value) {
                 item_attrs[i + 1] = const_value;
+                note_style_token(state, name, const_value, value_clean);
             }
             /*Unknown const: drop the attribute so the widget keeps its default,
              *but say WHERE it was, or the message cannot be acted on in a tree
@@ -1401,7 +1425,7 @@ static void apply_pending_inline_text(lv_xml_parser_state_t * state, const char 
     /*Resolve $prop/#const exactly like attribute values (whole-value)*/
     const char * synth[5] = {"text", buf, "translation_tag", buf, NULL};
     resolve_params(state, &state->scope, state->parent_scope, synth, state->parent_attrs);
-    resolve_consts(synth, &state->scope);
+    resolve_consts(NULL, synth, &state->scope);
     if(synth[0][0] == '\0' || synth[2][0] == '\0') { /*unresolved -> dropped pair*/
         lv_free(buf);
         return;
@@ -2362,7 +2386,7 @@ static void view_start_element_handler(void * user_data, const char * name, cons
      *with the corresponding parameter. E.g. "text", "${title}" -> "text", "Hello" */
     resolve_params(state, &state->scope, state->parent_scope, attrs, state->parent_attrs);
 
-    resolve_consts(attrs, &state->scope);
+    resolve_consts(state, attrs, &state->scope);
 
     state->item = NULL;
     /* Select the widget specific parser type based on the name */

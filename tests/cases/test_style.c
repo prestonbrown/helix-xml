@@ -680,6 +680,161 @@ static void test_inline_style_attribute_with_a_state_suffix_applies_only_in_that
 }
 
 /*===========================================================================
+ * Token styles: an inline color written as `#const` remembers the const
+ *==========================================================================*/
+
+static uint32_t local_color(lv_obj_t * obj, lv_style_prop_t prop, lv_style_selector_t selector)
+{
+    lv_style_value_t v;
+    TEST_ASSERT_EQUAL_INT_MESSAGE(LV_STYLE_RES_FOUND, lv_obj_get_local_style_prop(obj, prop, &v, selector),
+                                  "no local style value to read");
+    return lv_color_to_int(v.color);
+}
+
+static const char * TOKEN_STYLE_XML =
+    "<component>"
+    "  <view extends=\"lv_obj\" name=\"tok_root\">"
+    "    <lv_obj name=\"tok\" style_bg_color=\"#tok_accent\" style_border_color=\"#tok_accent\"/>"
+    "    <lv_obj name=\"hex\" style_bg_color=\"#123456\" style_border_color=\"0x654321\"/>"
+    "    <lv_obj name=\"sel\" style_bg_color-checked=\"#tok_accent\"/>"
+    "    <lv_label name=\"lbl\" text=\"x\" style_text_color=\"#tok_accent\"/>"
+    "  </view>"
+    "</component>";
+
+static lv_obj_t * create_token_root(void)
+{
+    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_register_const(NULL, "tok_accent", "0xFF8800"));
+    ASSERT_XML_REGISTERS("token_style", TOKEN_STYLE_XML);
+    lv_obj_t * root = XML_CREATE(helix_test_env_screen(), "token_style", NULL);
+    helix_test_pump(30);
+    return root;
+}
+
+static void test_inline_token_color_is_recorded_and_a_hex_literal_is_not(void)
+{
+    lv_obj_t * root = create_token_root();
+    lv_obj_t * tok = ASSERT_NAMED(root, "tok");
+    lv_obj_t * hex = ASSERT_NAMED(root, "hex");
+
+    TEST_ASSERT_EQUAL_HEX32(0xFF8800, local_color(tok, LV_STYLE_BG_COLOR, LV_PART_MAIN));
+    TEST_ASSERT_TRUE(lv_xml_obj_has_token_style(tok, LV_STYLE_BG_COLOR, LV_PART_MAIN));
+    TEST_ASSERT_TRUE(lv_xml_obj_has_token_style(tok, LV_STYLE_BORDER_COLOR, LV_PART_MAIN));
+    TEST_ASSERT_FALSE(lv_xml_obj_has_token_style(tok, LV_STYLE_TEXT_COLOR, LV_PART_MAIN));
+
+    TEST_ASSERT_EQUAL_HEX32(0x123456, local_color(hex, LV_STYLE_BG_COLOR, LV_PART_MAIN));
+    TEST_ASSERT_FALSE(lv_xml_obj_has_token_style(hex, LV_STYLE_BG_COLOR, LV_PART_MAIN));
+    TEST_ASSERT_FALSE(lv_xml_obj_has_token_style(hex, LV_STYLE_BORDER_COLOR, LV_PART_MAIN));
+    TEST_ASSERT_FALSE(lv_xml_obj_has_token_style(root, LV_STYLE_BG_COLOR, LV_PART_MAIN));
+}
+
+static void test_inline_token_color_with_a_state_suffix_is_recorded_with_its_selector(void)
+{
+    lv_obj_t * sel = ASSERT_NAMED(create_token_root(), "sel");
+
+    TEST_ASSERT_TRUE(lv_xml_obj_has_token_style(sel, LV_STYLE_BG_COLOR, LV_STATE_CHECKED));
+    TEST_ASSERT_FALSE(lv_xml_obj_has_token_style(sel, LV_STYLE_BG_COLOR, LV_PART_MAIN));
+}
+
+static void test_reapply_after_a_const_change_updates_every_recorded_color(void)
+{
+    lv_obj_t * root = create_token_root();
+
+    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_set_const(NULL, "tok_accent", "0x00AA11"));
+    lv_xml_reapply_token_styles(root);
+
+    lv_obj_t * tok = ASSERT_NAMED(root, "tok");
+    TEST_ASSERT_EQUAL_HEX32(0x00AA11, local_color(tok, LV_STYLE_BG_COLOR, LV_PART_MAIN));
+    TEST_ASSERT_EQUAL_HEX32(0x00AA11, local_color(tok, LV_STYLE_BORDER_COLOR, LV_PART_MAIN));
+    TEST_ASSERT_EQUAL_HEX32(0x00AA11, local_color(ASSERT_NAMED(root, "sel"), LV_STYLE_BG_COLOR, LV_STATE_CHECKED));
+    TEST_ASSERT_EQUAL_HEX32(0x123456, local_color(ASSERT_NAMED(root, "hex"), LV_STYLE_BG_COLOR, LV_PART_MAIN));
+
+    /*A second change still lands: the record tracks what it last wrote.*/
+    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_set_const(NULL, "tok_accent", "0x2233CC"));
+    lv_xml_reapply_token_styles(root);
+    TEST_ASSERT_EQUAL_HEX32(0x2233CC, local_color(tok, LV_STYLE_BG_COLOR, LV_PART_MAIN));
+}
+
+static void test_reapply_leaves_a_color_changed_after_creation_alone(void)
+{
+    lv_obj_t * root = create_token_root();
+    lv_obj_t * tok = ASSERT_NAMED(root, "tok");
+
+    lv_obj_set_style_bg_color(tok, lv_color_hex(0xEE0000), LV_PART_MAIN);
+    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_set_const(NULL, "tok_accent", "0x00AA11"));
+    lv_xml_reapply_token_styles(root);
+
+    TEST_ASSERT_EQUAL_HEX32(0xEE0000, local_color(tok, LV_STYLE_BG_COLOR, LV_PART_MAIN));
+    TEST_ASSERT_EQUAL_HEX32(0x00AA11, local_color(tok, LV_STYLE_BORDER_COLOR, LV_PART_MAIN));
+}
+
+static void test_token_color_record_is_freed_with_its_object(void)
+{
+    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_register_const(NULL, "tok_accent", "0xFF8800"));
+    ASSERT_XML_REGISTERS("token_style", TOKEN_STYLE_XML);
+
+    size_t after_cycle[4];
+    for(int i = 0; i < 4; i++) {
+        lv_obj_t * root = XML_CREATE(helix_test_env_screen(), "token_style", NULL);
+        lv_obj_delete(root);
+        helix_test_pump(30);
+        lv_mem_monitor_t mon;
+        lv_mem_monitor(&mon);
+        after_cycle[i] = mon.free_size;
+    }
+    /*Cycle 0 warms the allocator's size classes up; 1..3 are steady state.*/
+    for(int i = 2; i < 4; i++) {
+        TEST_ASSERT_EQUAL_size_t_MESSAGE(after_cycle[1], after_cycle[i],
+                                         "a deleted object left its token-style record behind");
+    }
+
+    /*A new object, likely at a recycled address, inherits nothing.*/
+    lv_obj_t * fresh = lv_obj_create(helix_test_env_screen());
+    lv_obj_set_style_bg_color(fresh, lv_color_hex(0xFF8800), LV_PART_MAIN);
+    TEST_ASSERT_FALSE(lv_xml_obj_has_token_style(fresh, LV_STYLE_BG_COLOR, LV_PART_MAIN));
+}
+
+static void test_token_color_on_a_label_is_recorded_through_the_obj_apply_chain(void)
+{
+    lv_obj_t * root = create_token_root();
+    lv_obj_t * lbl = ASSERT_NAMED(root, "lbl");
+
+    TEST_ASSERT_TRUE(lv_xml_obj_has_token_style(lbl, LV_STYLE_TEXT_COLOR, LV_PART_MAIN));
+    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_set_const(NULL, "tok_accent", "0x00AA11"));
+    lv_xml_reapply_token_styles(root);
+    TEST_ASSERT_EQUAL_HEX32(0x00AA11, local_color(lbl, LV_STYLE_TEXT_COLOR, LV_PART_MAIN));
+}
+
+/** An instance attribute lands on the view's root after the view's own attrs,
+ *  so it is the later write of the same prop+selector and decides the record. */
+static void test_a_later_inline_write_replaces_or_removes_the_record(void)
+{
+    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_register_const(NULL, "tok_accent", "0xFF8800"));
+    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_register_const(NULL, "tok_other", "0x0000FF"));
+    ASSERT_XML_REGISTERS("tok_leaf",
+                         "<component><view extends=\"lv_obj\" style_bg_color=\"#tok_accent\"/></component>");
+    ASSERT_XML_REGISTERS("tok_override",
+                         "<component>"
+                         "  <view extends=\"lv_obj\">"
+                         "    <tok_leaf name=\"to_hex\" style_bg_color=\"0x111111\"/>"
+                         "    <tok_leaf name=\"to_other\" style_bg_color=\"#tok_other\"/>"
+                         "  </view>"
+                         "</component>");
+    lv_obj_t * root = XML_CREATE(helix_test_env_screen(), "tok_override", NULL);
+    helix_test_pump(30);
+
+    lv_obj_t * to_hex = ASSERT_NAMED(root, "to_hex");
+    lv_obj_t * to_other = ASSERT_NAMED(root, "to_other");
+    TEST_ASSERT_FALSE(lv_xml_obj_has_token_style(to_hex, LV_STYLE_BG_COLOR, LV_PART_MAIN));
+    TEST_ASSERT_TRUE(lv_xml_obj_has_token_style(to_other, LV_STYLE_BG_COLOR, LV_PART_MAIN));
+
+    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_set_const(NULL, "tok_accent", "0x00AA11"));
+    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_set_const(NULL, "tok_other", "0x2233CC"));
+    lv_xml_reapply_token_styles(root);
+    TEST_ASSERT_EQUAL_HEX32(0x111111, local_color(to_hex, LV_STYLE_BG_COLOR, LV_PART_MAIN));
+    TEST_ASSERT_EQUAL_HEX32(0x2233CC, local_color(to_other, LV_STYLE_BG_COLOR, LV_PART_MAIN));
+}
+
+/*===========================================================================
  * The cascade
  *==========================================================================*/
 
@@ -1786,6 +1941,14 @@ int main(void)
     RUN_TEST(test_selector_attribute_scopes_a_style_to_a_single_part);
     RUN_TEST(test_state_qualified_style_applies_only_in_that_state);
     RUN_TEST(test_inline_style_attribute_with_a_state_suffix_applies_only_in_that_state);
+
+    RUN_TEST(test_inline_token_color_is_recorded_and_a_hex_literal_is_not);
+    RUN_TEST(test_inline_token_color_with_a_state_suffix_is_recorded_with_its_selector);
+    RUN_TEST(test_reapply_after_a_const_change_updates_every_recorded_color);
+    RUN_TEST(test_reapply_leaves_a_color_changed_after_creation_alone);
+    RUN_TEST(test_token_color_record_is_freed_with_its_object);
+    RUN_TEST(test_token_color_on_a_label_is_recorded_through_the_obj_apply_chain);
+    RUN_TEST(test_a_later_inline_write_replaces_or_removes_the_record);
 
     RUN_TEST(test_inline_style_attribute_outranks_a_style_element);
     RUN_TEST(test_inline_style_attribute_outranks_a_bound_style);

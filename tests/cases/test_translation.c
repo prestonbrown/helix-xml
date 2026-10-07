@@ -563,6 +563,124 @@ static void test_an_unknown_translation_tag_on_a_label_shows_the_tag(void)
     ASSERT_LABEL_TEXT(ASSERT_NAMED(card, "trans_label"), "undeclared_tag");
 }
 
+
+/*===========================================================================
+ * Implied tags: a literal text attribute is its own translation tag
+ *==========================================================================*/
+
+static lv_obj_t * create_implied_card(const char * body)
+{
+    static char xml[1024];
+    lv_snprintf(xml, sizeof(xml),
+                "<component><view extends=\"lv_obj\" name=\"implied_root\">%s</view></component>", body);
+    ASSERT_XML_REGISTERS("implied_card", xml);
+    lv_obj_t * card = XML_CREATE(helix_test_env_screen(), "implied_card", NULL);
+    helix_test_pump(30);
+    return card;
+}
+
+/** text= with no translation_tag= translates as if the tag repeated the text. */
+static void test_literal_text_without_a_tag_is_translated(void)
+{
+    register_pack(PACK_COMPLETE);
+    lv_translation_set_language("de");
+
+    lv_obj_t * card = create_implied_card("<lv_label name=\"l\" text=\"dog\"/>");
+    lv_obj_t * label = ASSERT_NAMED(card, "l");
+    ASSERT_LABEL_TEXT(label, "Hund");
+
+    lv_translation_set_language("fr");
+    helix_test_pump(30);
+    ASSERT_LABEL_TEXT(label, "Chien");
+}
+
+/** An explicit empty tag still means "do not translate". */
+static void test_an_explicit_empty_tag_keeps_the_text_untranslated(void)
+{
+    register_pack(PACK_COMPLETE);
+    lv_translation_set_language("de");
+
+    lv_obj_t * card = create_implied_card("<lv_label name=\"l\" text=\"dog\" translation_tag=\"\"/>");
+    ASSERT_LABEL_TEXT(ASSERT_NAMED(card, "l"), "dog");
+}
+
+/** bind_text renders a subject, so the literal beside it implies nothing. */
+static void test_text_beside_bind_text_implies_no_tag(void)
+{
+    register_pack(PACK_COMPLETE);
+    lv_translation_set_language("de");
+
+    static lv_subject_t subj;
+    static char buf[16];
+    lv_subject_init_string(&subj, buf, NULL, sizeof(buf), "live");
+    lv_xml_register_subject(NULL, "implied_subj", &subj);
+
+    lv_obj_t * card =
+        create_implied_card("<lv_label name=\"l\" text=\"dog\" bind_text=\"implied_subj\"/>");
+    lv_obj_t * label = ASSERT_NAMED(card, "l");
+    lv_translation_set_language("fr");
+    helix_test_pump(30);
+    ASSERT_LABEL_TEXT(label, "live");
+}
+
+#define IMPLIED_ROW_API                                                                  \
+    "<api>"                                                                              \
+    "  <prop name=\"label\" type=\"string\" default=\"\"/>"                              \
+    "  <prop name=\"label_tag\" type=\"string\" default=\"\"/>"                          \
+    "  <prop name=\"primary_text\" type=\"string\" default=\"\"/>"                       \
+    "  <prop name=\"primary_tag\" type=\"string\" default=\"\"/>"                        \
+    "</api>"
+
+/** A component's X_tag prop is implied from its literal X (or X_text) attribute. */
+static void test_a_component_tag_prop_is_implied_from_its_literal_text_prop(void)
+{
+    register_pack(PACK_COMPLETE);
+    lv_translation_set_language("de");
+
+    ASSERT_XML_REGISTERS("implied_row",
+                         "<component>" IMPLIED_ROW_API
+                         "  <view extends=\"lv_obj\">"
+                         "    <lv_label name=\"a\" text=\"$label\" translation_tag=\"$label_tag\"/>"
+                         "    <lv_label name=\"b\" text=\"$primary_text\" translation_tag=\"$primary_tag\"/>"
+                         "  </view>"
+                         "</component>");
+
+    lv_obj_t * card = create_implied_card("<implied_row name=\"row\" label=\"dog\" primary_text=\"cat\"/>");
+    lv_obj_t * row = ASSERT_NAMED(card, "row");
+    ASSERT_LABEL_TEXT(ASSERT_NAMED(row, "a"), "Hund");
+    ASSERT_LABEL_TEXT(ASSERT_NAMED(row, "b"), "Katze");
+}
+
+/** A forwarded $prop is not a literal: text="$label" with no tag stays as passed. */
+static void test_a_prop_reference_implies_no_tag(void)
+{
+    register_pack(PACK_COMPLETE);
+    lv_translation_set_language("de");
+
+    ASSERT_XML_REGISTERS("implied_row",
+                         "<component>" IMPLIED_ROW_API
+                         "  <view extends=\"lv_obj\">"
+                         "    <lv_label name=\"a\" text=\"$label\"/>"
+                         "  </view>"
+                         "</component>");
+
+    lv_obj_t * card = create_implied_card("<implied_row name=\"row\" label=\"dog\"/>");
+    ASSERT_LABEL_TEXT(ASSERT_NAMED(ASSERT_NAMED(card, "row"), "a"), "dog");
+}
+
+/** A widget that has no use for the implied tag ignores it without a warning. */
+static void test_an_implied_tag_the_widget_ignores_is_not_reported(void)
+{
+    register_pack(PACK_COMPLETE);
+    lv_translation_set_language("de");
+
+    log_capture_start();
+    create_implied_card("<lv_textarea name=\"ta\" text=\"55\"/>");
+    log_capture_stop();
+    TEST_ASSERT_FALSE_MESSAGE(log_contains("Unknown attribute"),
+                              "a synthesized tag was reported as an authored typo");
+}
+
 /*---------------------------------------------------------------------------
  * main
  *--------------------------------------------------------------------------*/
@@ -591,6 +709,13 @@ int main(void)
     RUN_TEST(test_translation_tag_on_a_label_resolves_to_translated_text);
     RUN_TEST(test_changing_language_retranslates_an_existing_label);
     RUN_TEST(test_an_unknown_translation_tag_on_a_label_shows_the_tag);
+
+    RUN_TEST(test_literal_text_without_a_tag_is_translated);
+    RUN_TEST(test_an_explicit_empty_tag_keeps_the_text_untranslated);
+    RUN_TEST(test_text_beside_bind_text_implies_no_tag);
+    RUN_TEST(test_a_component_tag_prop_is_implied_from_its_literal_text_prop);
+    RUN_TEST(test_a_prop_reference_implies_no_tag);
+    RUN_TEST(test_an_implied_tag_the_widget_ignores_is_not_reported);
 
     return UNITY_END();
 }

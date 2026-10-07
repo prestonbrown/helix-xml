@@ -81,6 +81,8 @@ static void view_end_element_handler(void * user_data, const char * name);
 static void view_character_data_handler(void * user_data, const XML_Char * s, int len);
 static void collapse_whitespace(char * s);
 static void apply_pending_inline_text(lv_xml_parser_state_t * state, const char * name);
+static const char ** imply_translation_tags(lv_xml_parser_state_t * state, const char * name,
+                                           const char ** attrs);
 static void free_pcdata_ll(lv_xml_parser_state_t * state);
 static char ** xml_frag_copy_attrs(const char ** attrs);
 static void xml_frag_buffer_event(xml_frag_capture_t * cap, int kind, const char * name,
@@ -1395,6 +1397,122 @@ static void view_character_data_handler(void * user_data, const XML_Char * s, in
     entry->buf[entry->len] = '\0';
 }
 
+#if LV_USE_TRANSLATION
+/** The literal an absent translation tag is implied from: `translation_tag`
+ *  pairs with `text`, any other `X_tag` with `X`, else with `X_text`
+ *  (label_tag/label, primary_tag/primary_text). NULL when the element names the
+ *  tag itself (an empty one included, which means "do not translate"), binds its
+ *  text to a subject, or the paired value is empty or not a literal: a `$prop`,
+ *  `#const` or `${}` composition is decided by whoever supplies it. */
+static const char * implied_tag_value(const char ** attrs, const char * tag_name)
+{
+    if(lv_xml_get_value_of(attrs, tag_name) != NULL) return NULL;
+    if(lv_xml_get_value_of(attrs, "bind_text") != NULL) return NULL;
+
+    const char * value;
+    if(lv_streq(tag_name, "translation_tag")) {
+        value = lv_xml_get_value_of(attrs, "text");
+    }
+    else {
+        char base[64];
+        size_t len = lv_strlen(tag_name);
+        if(len <= 4 || len >= sizeof(base) - 5 || !lv_streq(tag_name + len - 4, "_tag")) return NULL;
+        lv_memcpy(base, tag_name, len - 4);
+        base[len - 4] = '\0';
+        value = lv_xml_get_value_of(attrs, base);
+        if(value == NULL) {
+            lv_memcpy(base + len - 4, "_text", 6);
+            value = lv_xml_get_value_of(attrs, base);
+        }
+    }
+
+    if(value == NULL || value[0] == '\0' || value[0] == '$' || value[0] == '#') return NULL;
+    if(xml_value_has_compose(value)) return NULL;
+    return value;
+}
+
+/** Tags the widget parsers translate through: lv_label/lv_checkbox/tabs,
+ *  lv_textarea's placeholder and lv_dropdown's options. */
+static const char * const widget_tag_attrs[] = {"translation_tag", "placeholder_tag", "options_tag"};
+
+static bool is_widget_tag_attr(const char * name)
+{
+    for(size_t i = 0; i < sizeof(widget_tag_attrs) / sizeof(widget_tag_attrs[0]); i++) {
+        if(lv_streq(widget_tag_attrs[i], name)) return true;
+    }
+    return false;
+}
+
+/** Visit every tag `name` may carry: the widget-level ones, plus each `*_tag`
+ *  prop a component declares. Returns how many have an implied value; with
+ *  `out` set, appends those name/value pairs there. */
+static uint32_t collect_implied_tags(const char * name, const char ** attrs, const char ** out)
+{
+    uint32_t n = 0;
+    for(size_t i = 0; i < sizeof(widget_tag_attrs) / sizeof(widget_tag_attrs[0]); i++) {
+        const char * v = implied_tag_value(attrs, widget_tag_attrs[i]);
+        if(v == NULL) continue;
+        if(out) {
+            out[2 * n] = widget_tag_attrs[i];
+            out[2 * n + 1] = v;
+        }
+        n++;
+    }
+
+    lv_xml_component_scope_t * scope = lv_xml_component_get_scope(name);
+    if(scope == NULL) return n;
+    lv_xml_param_t * prop;
+    LV_LL_READ(&scope->param_ll, prop) {
+        size_t len = lv_strlen(prop->name);
+        if(len <= 4 || !lv_streq(prop->name + len - 4, "_tag") || is_widget_tag_attr(prop->name)) continue;
+        const char * v = implied_tag_value(attrs, prop->name);
+        if(v == NULL) continue;
+        if(out) {
+            out[2 * n] = prop->name;
+            out[2 * n + 1] = v;
+        }
+        n++;
+    }
+    return n;
+}
+
+/** A literal text attribute is its own translation key: `text="Save"` reads as
+ *  `text="Save" translation_tag="Save"`, `label="Fan"` on a component that
+ *  declares label_tag as `label_tag="Fan"`. Returns `attrs` itself when nothing
+ *  is implied, else a copy with the implied tags appended, owned by `state` and
+ *  freed at parse end. Appended last, a tag wins over the text it repeats.
+ *  Until a language is selected nothing is translating, so nothing is implied:
+ *  each tag costs a copy and a lookup that warns while no language is set. */
+static const char ** imply_translation_tags(lv_xml_parser_state_t * state, const char * name,
+                                           const char ** attrs)
+{
+    if(attrs == NULL || lv_translation_get_language() == NULL) return attrs;
+    uint32_t implied = collect_implied_tags(name, attrs, NULL);
+    if(implied == 0) return attrs;
+
+    uint32_t cnt = 0;
+    while(attrs[cnt]) cnt++;
+    const char ** out = lv_malloc(sizeof(const char *) * (cnt + 2 * implied + 1));
+    if(out == NULL) return attrs;
+    lv_memcpy(out, attrs, sizeof(const char *) * cnt);
+    collect_implied_tags(name, attrs, out + cnt);
+    out[cnt + 2 * implied] = NULL;
+    if(!xml_state_track_string(state, (char *)out)) {
+        lv_free(out);
+        return attrs;
+    }
+    return out;
+}
+#else
+static const char ** imply_translation_tags(lv_xml_parser_state_t * state, const char * name,
+                                           const char ** attrs)
+{
+    LV_UNUSED(state);
+    LV_UNUSED(name);
+    return attrs;
+}
+#endif /*LV_USE_TRANSLATION*/
+
 /** Pop the PCDATA entry for the element just closed and, if it captured real
  *  text, apply it as `text` + `translation_tag` through the element's normal
  *  apply_cb — i.e. `<text_muted>Foo</text_muted>` behaves like
@@ -2385,6 +2503,9 @@ static void view_start_element_handler(void * user_data, const char * name, cons
      *E.g. in `my_button` `<lv_label x="5" text="${title}".
      *This function changes the pointers in the child attributes if the start with '$'
      *with the corresponding parameter. E.g. "text", "${title}" -> "text", "Hello" */
+    const char ** authored_attrs = attrs;
+    attrs = imply_translation_tags(state, name, attrs);
+
     state->token_count = 0;
     resolve_params(state, &state->scope, state->parent_scope, attrs, state->parent_attrs);
 
@@ -2403,7 +2524,16 @@ static void view_start_element_handler(void * user_data, const char * name, cons
             if(state->scope.is_widget && is_view) lv_obj_remove_style_all(state->item);
 
             /*Apply the attributes from e.g. `<lv_slider value="30" x="20">`*/
-            if(p->builtin) lv_xml_attr_check_begin(state, attrs, name);
+            if(p->builtin) {
+                lv_xml_attr_check_begin(state, attrs, name);
+                /*An implied tag is not something the author wrote, so a widget
+                 *that has no use for it is not a typo to report.*/
+                for(uint32_t i = 0; attrs != authored_attrs && attrs[i]; i += 2) {
+                    if(lv_xml_get_value_of(authored_attrs, attrs[i]) == NULL) {
+                        lv_xml_attr_check_consume(state, attrs[i]);
+                    }
+                }
+            }
             p->apply_cb(state, attrs);
             lv_xml_attr_check_end(state);
         }

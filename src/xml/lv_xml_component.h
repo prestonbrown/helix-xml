@@ -54,11 +54,28 @@ lv_result_t lv_xml_register_component_from_file(const char * path);
 
 /**
  * Get the scope of a Component which was registered by
- * `lv_xml_register_component_from_data()` or `lv_xml_register_component_from_file()`
+ * `lv_xml_register_component_from_data()` or `lv_xml_register_component_from_file()`.
+ * A name that is not registered is offered to the component loader, if one is
+ * set, and looked up again once it returns.
  * @param component_name    Name of the Component
  * @return                  Pointer to the scope or NULL if not found
  */
 lv_xml_component_scope_t * lv_xml_component_get_scope(const char * component_name);
+
+/**
+ * Registers a component the first time something asks for it. Called with a
+ * name no component is registered under; registers it (or leaves it missing)
+ * and returns. Never called for "globals", nor while it is already running.
+ */
+typedef void (*lv_xml_component_loader_cb_t)(const char * name);
+
+/**
+ * Set the callback `lv_xml_component_get_scope()` hands an unregistered name
+ * to, so a tag, `extends=`, `lv_xml_create()` or `<component>.style` reference
+ * can name a component that was never registered up front. NULL removes it.
+ * @param cb    the loader, or NULL
+ */
+void lv_xml_set_component_loader(lv_xml_component_loader_cb_t cb);
 
 /**
  * Callback for `lv_xml_component_foreach`, invoked once per registered scope.

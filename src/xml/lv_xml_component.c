@@ -66,6 +66,7 @@ static void scope_retime_transitions(lv_ll_t * list);
 static bool scope_reapply_style_tokens(lv_ll_t * list);
 static void component_scope_index_link(lv_xml_component_scope_t * scope);
 static void component_scope_index_unlink(lv_xml_component_scope_t * scope);
+static lv_xml_component_scope_t * component_scope_find(const char * component_name);
 
 /**********************
  *  STATIC VARIABLES
@@ -90,6 +91,10 @@ static lv_xml_component_scope_t * global_scope_p;
  *  `component.style` reference looks a scope up, and the list holds hundreds.
  *  `globals` is left out; `global_scope_p` answers it. */
 static lv_xml_name_index_t component_scope_index;
+
+static lv_xml_component_loader_cb_t component_loader;
+/** Set while the loader runs: it registers through this file, which looks names up. */
+static bool component_loader_running;
 
 /** Fixed-point fraction of 256 applied to every declared transition duration.
  *  256 runs transitions as authored; 0 disables motion. */
@@ -338,7 +343,24 @@ void lv_xml_name_index_clear(lv_xml_name_index_t * idx)
     idx->failed = false;
 }
 
+void lv_xml_set_component_loader(lv_xml_component_loader_cb_t cb)
+{
+    component_loader = cb;
+}
+
 lv_xml_component_scope_t * lv_xml_component_get_scope(const char * component_name)
+{
+    lv_xml_component_scope_t * scope = component_scope_find(component_name);
+    if(scope || component_loader == NULL || component_loader_running) return scope;
+    if(component_name == NULL || lv_streq(component_name, "globals")) return NULL;
+
+    component_loader_running = true;
+    component_loader(component_name);
+    component_loader_running = false;
+    return component_scope_find(component_name);
+}
+
+static lv_xml_component_scope_t * component_scope_find(const char * component_name)
 {
     if(component_name == NULL) return NULL;
 
@@ -593,7 +615,8 @@ void lv_xml_subject_record_release_storage(lv_xml_subject_t * s)
 
 lv_result_t lv_xml_component_unregister(const char * name)
 {
-    lv_xml_component_scope_t * scope = lv_xml_component_get_scope(name);
+    /* Not get_scope(): unregistering a name must not first load it. */
+    lv_xml_component_scope_t * scope = component_scope_find(name);
     if(scope == NULL) return LV_RESULT_INVALID;
 
     component_scope_retire(scope);

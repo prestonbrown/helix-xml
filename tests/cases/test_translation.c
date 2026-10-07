@@ -79,6 +79,7 @@ void setUp(void)
 
 void tearDown(void)
 {
+    lv_xml_set_translation_key_cb(NULL);
     helix_test_env_teardown();
 }
 
@@ -673,6 +674,47 @@ static void test_options_tag_is_never_implied(void)
     ASSERT_LABEL_TEXT(ASSERT_NAMED(ASSERT_NAMED(card, "row"), "a"), "dog");
 }
 
+/** placeholder_tag is never implied either: an input re-applies a tagged
+ *  placeholder on every language change, over whatever code has set since. */
+static void test_placeholder_tag_is_never_implied(void)
+{
+    register_pack(PACK_COMPLETE);
+    lv_translation_set_language("de");
+
+    ASSERT_XML_REGISTERS("implied_field",
+                         "<component>"
+                         "  <api>"
+                         "    <prop name=\"placeholder\" type=\"string\" default=\"\"/>"
+                         "    <prop name=\"placeholder_tag\" type=\"string\" default=\"\"/>"
+                         "  </api>"
+                         "  <view extends=\"lv_obj\">"
+                         "    <lv_label name=\"a\" text=\"$placeholder\" translation_tag=\"$placeholder_tag\"/>"
+                         "  </view>"
+                         "</component>");
+
+    lv_obj_t * card = create_implied_card("<implied_field name=\"row\" placeholder=\"dog\"/>");
+    ASSERT_LABEL_TEXT(ASSERT_NAMED(ASSERT_NAMED(card, "row"), "a"), "dog");
+}
+
+static bool reject_dog(const char * text)
+{
+    return !lv_streq(text, "dog");
+}
+
+/** A literal the key callback rejects is not a key, so it implies no tag. */
+static void test_a_literal_the_key_callback_rejects_implies_no_tag(void)
+{
+    register_pack(PACK_COMPLETE);
+    lv_translation_set_language("de");
+    lv_xml_set_translation_key_cb(reject_dog);
+
+    lv_obj_t * card = create_implied_card("<lv_label name=\"a\" text=\"dog\"/>"
+                                          "<lv_label name=\"b\" text=\"cat\"/>");
+    lv_xml_set_translation_key_cb(NULL);
+    ASSERT_LABEL_TEXT(ASSERT_NAMED(card, "a"), "dog");
+    ASSERT_LABEL_TEXT(ASSERT_NAMED(card, "b"), "Katze");
+}
+
 /** A forwarded $prop is not a literal: text="$label" with no tag stays as passed. */
 static void test_a_prop_reference_implies_no_tag(void)
 {
@@ -737,6 +779,8 @@ int main(void)
     RUN_TEST(test_text_beside_bind_text_implies_no_tag);
     RUN_TEST(test_a_component_tag_prop_is_implied_from_its_literal_text_prop);
     RUN_TEST(test_options_tag_is_never_implied);
+    RUN_TEST(test_placeholder_tag_is_never_implied);
+    RUN_TEST(test_a_literal_the_key_callback_rejects_implies_no_tag);
     RUN_TEST(test_a_prop_reference_implies_no_tag);
     RUN_TEST(test_an_implied_tag_the_widget_ignores_is_not_reported);
 

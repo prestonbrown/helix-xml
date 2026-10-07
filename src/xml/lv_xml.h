@@ -47,6 +47,21 @@ void lv_xml_init(void);
 void lv_xml_deinit(void);
 
 /**
+ * Decides whether a literal text value can be a translation key.
+ * @param text  the literal, entities already decoded
+ * @return      true if `text` should carry an implied translation tag
+ */
+typedef bool (*lv_xml_translation_key_cb_t)(const char * text);
+
+/**
+ * Set the callback that keeps non-keys (numbers, punctuation, icon glyphs...)
+ * from getting an implied translation tag. NULL, the default, treats every
+ * literal as a key. The setting survives lv_xml_deinit().
+ * @param cb    the callback, or NULL
+ */
+void lv_xml_set_translation_key_cb(lv_xml_translation_key_cb_t cb);
+
+/**
  * Create a UI element from XML.
  * @param parent    Pointer to the parent
  * @param name      The name of an already-registered Component or Widget

@@ -115,6 +115,8 @@ static void free_timelines_event_cb(lv_event_t * e);
  *  STATIC VARIABLES
  **********************/
 
+static lv_xml_translation_key_cb_t translation_key_cb;
+
 /**********************
  *      MACROS
  **********************/
@@ -435,6 +437,11 @@ void * lv_xml_create_in_scope(lv_obj_t * parent, lv_xml_component_scope_t * pare
     XML_ParserFree(parser);
 
     return state.view;
+}
+
+void lv_xml_set_translation_key_cb(lv_xml_translation_key_cb_t cb)
+{
+    translation_key_cb = cb;
 }
 
 void * lv_xml_create(lv_obj_t * parent, const char * name, const char ** attrs)
@@ -1428,13 +1435,14 @@ static const char * implied_tag_value(const char ** attrs, const char * tag_name
 
     if(value == NULL || value[0] == '\0' || value[0] == '$' || value[0] == '#') return NULL;
     if(xml_value_has_compose(value)) return NULL;
+    if(translation_key_cb && !translation_key_cb(value)) return NULL;
     return value;
 }
 
 /** Visit every tag `name` may carry: translation_tag, plus each `*_tag` prop a
- *  component declares. options_tag is never implied: code routinely replaces a
- *  dropdown's options at runtime, and a tagged dropdown puts its XML options
- *  back on every language change. Returns how many have an implied value; with
+ *  component declares. options_tag and placeholder_tag are never implied: code
+ *  routinely replaces a dropdown's options and an input's placeholder at
+ *  runtime, and a tagged one puts its XML value back on every language change. Returns how many have an implied value; with
  *  `out` set, appends those name/value pairs there. */
 static uint32_t collect_implied_tags(const char * name, const char ** attrs, const char ** out)
 {
@@ -1454,7 +1462,8 @@ static uint32_t collect_implied_tags(const char * name, const char ** attrs, con
     LV_LL_READ(&scope->param_ll, prop) {
         size_t len = lv_strlen(prop->name);
         if(len <= 4 || !lv_streq(prop->name + len - 4, "_tag")) continue;
-        if(lv_streq(prop->name, "translation_tag") || lv_streq(prop->name, "options_tag")) continue;
+        if(lv_streq(prop->name, "translation_tag") || lv_streq(prop->name, "options_tag") ||
+           lv_streq(prop->name, "placeholder_tag")) continue;
         v = implied_tag_value(attrs, prop->name);
         if(v == NULL) continue;
         if(out) {

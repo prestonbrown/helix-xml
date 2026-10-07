@@ -651,6 +651,28 @@ static void test_a_component_tag_prop_is_implied_from_its_literal_text_prop(void
     ASSERT_LABEL_TEXT(ASSERT_NAMED(row, "b"), "Katze");
 }
 
+/** options_tag is never implied: a dropdown re-applies tagged options on every
+ *  language change, over whatever code has set since. */
+static void test_options_tag_is_never_implied(void)
+{
+    register_pack(PACK_COMPLETE);
+    lv_translation_set_language("de");
+
+    ASSERT_XML_REGISTERS("implied_opts",
+                         "<component>"
+                         "  <api>"
+                         "    <prop name=\"options\" type=\"string\" default=\"\"/>"
+                         "    <prop name=\"options_tag\" type=\"string\" default=\"\"/>"
+                         "  </api>"
+                         "  <view extends=\"lv_obj\">"
+                         "    <lv_label name=\"a\" text=\"$options\" translation_tag=\"$options_tag\"/>"
+                         "  </view>"
+                         "</component>");
+
+    lv_obj_t * card = create_implied_card("<implied_opts name=\"row\" options=\"dog\"/>");
+    ASSERT_LABEL_TEXT(ASSERT_NAMED(ASSERT_NAMED(card, "row"), "a"), "dog");
+}
+
 /** A forwarded $prop is not a literal: text="$label" with no tag stays as passed. */
 static void test_a_prop_reference_implies_no_tag(void)
 {
@@ -714,6 +736,7 @@ int main(void)
     RUN_TEST(test_an_explicit_empty_tag_keeps_the_text_untranslated);
     RUN_TEST(test_text_beside_bind_text_implies_no_tag);
     RUN_TEST(test_a_component_tag_prop_is_implied_from_its_literal_text_prop);
+    RUN_TEST(test_options_tag_is_never_implied);
     RUN_TEST(test_a_prop_reference_implies_no_tag);
     RUN_TEST(test_an_implied_tag_the_widget_ignores_is_not_reported);
 

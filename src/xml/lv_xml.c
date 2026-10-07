@@ -1431,30 +1431,19 @@ static const char * implied_tag_value(const char ** attrs, const char * tag_name
     return value;
 }
 
-/** Tags the widget parsers translate through: lv_label/lv_checkbox/tabs,
- *  lv_textarea's placeholder and lv_dropdown's options. */
-static const char * const widget_tag_attrs[] = {"translation_tag", "placeholder_tag", "options_tag"};
-
-static bool is_widget_tag_attr(const char * name)
-{
-    for(size_t i = 0; i < sizeof(widget_tag_attrs) / sizeof(widget_tag_attrs[0]); i++) {
-        if(lv_streq(widget_tag_attrs[i], name)) return true;
-    }
-    return false;
-}
-
-/** Visit every tag `name` may carry: the widget-level ones, plus each `*_tag`
- *  prop a component declares. Returns how many have an implied value; with
+/** Visit every tag `name` may carry: translation_tag, plus each `*_tag` prop a
+ *  component declares. options_tag is never implied: code routinely replaces a
+ *  dropdown's options at runtime, and a tagged dropdown puts its XML options
+ *  back on every language change. Returns how many have an implied value; with
  *  `out` set, appends those name/value pairs there. */
 static uint32_t collect_implied_tags(const char * name, const char ** attrs, const char ** out)
 {
     uint32_t n = 0;
-    for(size_t i = 0; i < sizeof(widget_tag_attrs) / sizeof(widget_tag_attrs[0]); i++) {
-        const char * v = implied_tag_value(attrs, widget_tag_attrs[i]);
-        if(v == NULL) continue;
+    const char * v = implied_tag_value(attrs, "translation_tag");
+    if(v) {
         if(out) {
-            out[2 * n] = widget_tag_attrs[i];
-            out[2 * n + 1] = v;
+            out[0] = "translation_tag";
+            out[1] = v;
         }
         n++;
     }
@@ -1464,8 +1453,9 @@ static uint32_t collect_implied_tags(const char * name, const char ** attrs, con
     lv_xml_param_t * prop;
     LV_LL_READ(&scope->param_ll, prop) {
         size_t len = lv_strlen(prop->name);
-        if(len <= 4 || !lv_streq(prop->name + len - 4, "_tag") || is_widget_tag_attr(prop->name)) continue;
-        const char * v = implied_tag_value(attrs, prop->name);
+        if(len <= 4 || !lv_streq(prop->name + len - 4, "_tag")) continue;
+        if(lv_streq(prop->name, "translation_tag") || lv_streq(prop->name, "options_tag")) continue;
+        v = implied_tag_value(attrs, prop->name);
         if(v == NULL) continue;
         if(out) {
             out[2 * n] = prop->name;

@@ -348,11 +348,20 @@ void lv_xml_set_component_loader(lv_xml_component_loader_cb_t cb)
     component_loader = cb;
 }
 
+lv_xml_component_scope_t * lv_xml_component_find_scope(const char * component_name)
+{
+    return component_scope_find(component_name);
+}
+
 lv_xml_component_scope_t * lv_xml_component_get_scope(const char * component_name)
 {
     lv_xml_component_scope_t * scope = component_scope_find(component_name);
     if(scope || component_loader == NULL || component_loader_running) return scope;
     if(component_name == NULL || lv_streq(component_name, "globals")) return NULL;
+    /* Every element of a parsed view is looked up here (implied tags ask each one
+     * for its props), and a widget is never a component: keep built-in names
+     * away from the loader. */
+    if(lv_xml_widget_get_processor(component_name)) return NULL;
 
     component_loader_running = true;
     component_loader(component_name);

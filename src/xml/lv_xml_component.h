@@ -63,9 +63,19 @@ lv_result_t lv_xml_register_component_from_file(const char * path);
 lv_xml_component_scope_t * lv_xml_component_get_scope(const char * component_name);
 
 /**
+ * Get the scope of a registered Component without offering an unregistered name
+ * to the component loader. For callers that must not load: teardown, and code
+ * asking whether a component is registered yet.
+ * @param component_name    Name of the Component
+ * @return                  Pointer to the scope or NULL if not registered
+ */
+lv_xml_component_scope_t * lv_xml_component_find_scope(const char * component_name);
+
+/**
  * Registers a component the first time something asks for it. Called with a
  * name no component is registered under; registers it (or leaves it missing)
- * and returns. Never called for "globals", nor while it is already running.
+ * and returns. Never called for "globals", for a name a widget processor is
+ * registered under, nor while it is already running.
  */
 typedef void (*lv_xml_component_loader_cb_t)(const char * name);
 

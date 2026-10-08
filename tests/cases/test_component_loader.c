@@ -177,6 +177,29 @@ static void test_unregistering_an_unloaded_name_does_not_load_it(void)
     TEST_ASSERT_FALSE(is_registered("lazy_inner"));
 }
 
+static void test_a_built_in_widget_name_never_reaches_the_loader(void)
+{
+    XML_CREATE(helix_test_env_screen(), "lazy_inner", NULL);
+
+    TEST_ASSERT_NULL(lv_xml_component_get_scope("lv_label"));
+    TEST_ASSERT_NULL(lv_xml_component_get_scope("lv_obj"));
+
+    TEST_ASSERT_EQUAL_UINT32(0, calls_for("lv_label"));
+    TEST_ASSERT_EQUAL_UINT32(0, calls_for("lv_obj"));
+}
+
+static void test_find_scope_answers_without_loading(void)
+{
+    TEST_ASSERT_NULL(lv_xml_component_find_scope("lazy_inner"));
+    TEST_ASSERT_EQUAL_UINT32(0, call_count);
+    TEST_ASSERT_FALSE(is_registered("lazy_inner"));
+
+    XML_CREATE(helix_test_env_screen(), "lazy_inner", NULL);
+
+    TEST_ASSERT_NOT_NULL(lv_xml_component_find_scope("lazy_inner"));
+    TEST_ASSERT_EQUAL_UINT32(1, call_count);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -186,5 +209,7 @@ int main(void)
     RUN_TEST(test_a_name_with_no_definition_fails_as_loudly_as_without_a_loader);
     RUN_TEST(test_registered_components_and_globals_never_reach_the_loader);
     RUN_TEST(test_unregistering_an_unloaded_name_does_not_load_it);
+    RUN_TEST(test_a_built_in_widget_name_never_reaches_the_loader);
+    RUN_TEST(test_find_scope_answers_without_loading);
     return UNITY_END();
 }

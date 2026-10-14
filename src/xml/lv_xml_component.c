@@ -186,6 +186,14 @@ lv_obj_t * lv_xml_component_process(lv_xml_parser_state_t * state, const char * 
 {
     lv_xml_component_scope_t * scope = lv_xml_component_get_scope(name);
     if(scope == NULL) return NULL;
+    /* A component wrapping a same-named C++ widget (`<view extends="temp_display">`
+     * in temp_display.xml) reaches here only when that widget is not registered:
+     * its view root then names the component itself, and every instance would
+     * build another one until the stack overflows. */
+    if(scope->extends && lv_streq(scope->extends, name)) {
+        LV_LOG_WARN("Component '%s' extends its own name and no widget '%s' is registered", name, name);
+        return NULL;
+    }
     lv_obj_t * item = lv_xml_create_in_scope(state->parent, &state->scope, scope, attrs);
     if(item == NULL) {
         LV_LOG_WARN("Couldn't create component '%s'", name);

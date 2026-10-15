@@ -783,7 +783,14 @@ void lv_obj_xml_bind_style_cmp_apply(lv_xml_parser_state_t * state, const char *
         p->value = ref_value;
         p->cmp = cmp;
 
+        /* A subject that refuses observers (not initialized, or deinitialized) leaves
+         * nothing to toggle the style, so it is not left applied either. */
         lv_observer_t * obs = lv_subject_add_observer_obj(subject, bind_style_cmp_observer_cb, item, p);
+        if(obs == NULL) {
+            lv_obj_remove_style(item, &xml_style->style, sel);
+            lv_free(p);
+            continue;
+        }
         obs->auto_free_user_data = 1;
     }
 }

@@ -390,9 +390,11 @@ void lv_obj_xml_event_cb_apply(lv_xml_parser_state_t * state, const char ** attr
         return;
     }
 
+    /* An empty user_data (a prop left at its "" default) carries nothing: the
+     * callback gets NULL, as if the attribute were absent. */
     const char * user_data_str = lv_xml_get_value_of(attrs, "user_data");
     char * user_data = NULL;
-    if(user_data_str) user_data = lv_strdup(user_data_str);
+    if(user_data_str && user_data_str[0] != '\0') user_data = lv_strdup(user_data_str);
 
     lv_obj_add_event_cb(obj, cb, code, user_data);
     if(user_data) lv_obj_add_event_cb(obj, lv_event_free_user_data_cb, LV_EVENT_DELETE, user_data);

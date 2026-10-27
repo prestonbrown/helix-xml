@@ -34,6 +34,7 @@
 #include "lv_xml_private.h"
 #include "lv_xml_expr.h"
 #include "parsers/lv_xml_obj_parser.h"
+#include "parsers/lv_xml_responsive_grid_parser.h"
 #include "parsers/lv_xml_button_parser.h"
 #include "parsers/lv_xml_label_parser.h"
 #include "parsers/lv_xml_image_parser.h"
@@ -137,6 +138,9 @@ void lv_xml_init(void)
     lv_xml_register_font(NULL, "lv_font_default", lv_font_get_default());
 
     lv_xml_register_widget("lv_obj", lv_xml_obj_create, lv_xml_obj_apply);
+
+    lv_xml_responsive_grid_init();
+    lv_xml_register_widget("responsive_grid", lv_xml_responsive_grid_create, lv_xml_responsive_grid_apply);
 
 #if LV_USE_BUTTON
     lv_xml_register_widget("lv_button", lv_xml_button_create, lv_xml_button_apply);

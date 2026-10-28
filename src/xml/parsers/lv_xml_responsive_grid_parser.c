@@ -35,6 +35,7 @@ static grid_params_t * find_params(lv_obj_t * obj);
 static bool is_laid_out(lv_obj_t * item);
 static lv_xml_grid_fit_t fit_for(lv_obj_t * cont, const grid_params_t * p);
 static void place_item(lv_obj_t * item, int32_t x, int32_t y, int32_t w);
+static void release_width(lv_obj_t * item);
 static void layout_update(lv_obj_t * cont, void * user_data);
 
 /**********************
@@ -87,8 +88,13 @@ void * lv_xml_responsive_grid_create(lv_xml_parser_state_t * state, const char *
     lv_obj_t * obj = lv_obj_create(lv_xml_state_get_parent(state));
     grid_params_t * p = lv_malloc_zeroed(sizeof(grid_params_t));
     LV_ASSERT_MALLOC(p);
-    /*A bare layout box: no card chrome, no scrolling of its own, sized by its rows*/
-    lv_obj_remove_style_all(obj);
+    /*A bare layout box: no card chrome or padding, no scrolling of its own, sized by its rows.
+     *Local styles rather than removing the theme's, so a grid made scrollable keeps the
+     *theme's scrollbar.*/
+    lv_obj_set_style_bg_opa(obj, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_border_width(obj, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(obj, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_gap(obj, 0, LV_PART_MAIN);
     lv_obj_set_size(obj, lv_pct(100), LV_SIZE_CONTENT);
     lv_obj_remove_flag(obj, LV_OBJ_FLAG_SCROLLABLE);
     /*The parameters ride on the DELETE handler that frees them; user_data stays the caller's*/
@@ -197,6 +203,19 @@ static void place_item(lv_obj_t * item, int32_t x, int32_t y, int32_t w)
     }
 }
 
+/**
+ * Hand a child's width back to its own style once the grid stops placing it
+ * (hidden, floating, ignoring layout), as LVGL's grid does for a cell it does
+ * not stretch. Left set, the child would keep its last column width for good.
+ */
+static void release_width(lv_obj_t * item)
+{
+    if(item->w_layout) {
+        item->w_layout = 0;
+        lv_obj_mark_layout_as_dirty(item);
+    }
+}
+
 static void layout_update(lv_obj_t * cont, void * user_data)
 {
     LV_UNUSED(user_data);
@@ -210,7 +229,8 @@ static void layout_update(lv_obj_t * cont, void * user_data)
     int32_t origin_x = cont->coords.x1 + lv_obj_get_style_space_left(cont, LV_PART_MAIN) - lv_obj_get_scroll_x(cont);
     int32_t row_y = cont->coords.y1 + lv_obj_get_style_space_top(cont, LV_PART_MAIN) - lv_obj_get_scroll_y(cont);
 
-    /*A whole row is widened before its height is read, so each item's height is the one at its final width*/
+    /*An item's height is read as it stands; one whose height follows its width settles on a
+     *later pass, when its SIZE_CHANGED relayouts it and CHILD_CHANGED brings the grid back here*/
     uint32_t cnt = lv_obj_get_child_count(cont);
     uint32_t i = 0;
     while(i < cnt) {
@@ -218,7 +238,10 @@ static void layout_update(lv_obj_t * cont, void * user_data)
         int32_t row_h = 0;
         for(; i < cnt && col < fit.cols; i++) {
             lv_obj_t * item = lv_obj_get_child(cont, (int32_t)i);
-            if(!is_laid_out(item)) continue;
+            if(!is_laid_out(item)) {
+                release_width(item);
+                continue;
+            }
             place_item(item, origin_x + col * (fit.col_w + col_gap), row_y, fit.col_w);
             int32_t h = lv_obj_get_height(item) + lv_obj_get_style_margin_top(item, LV_PART_MAIN) +
                         lv_obj_get_style_margin_bottom(item, LV_PART_MAIN);

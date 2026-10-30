@@ -12,7 +12,7 @@
 #if LV_USE_XML
 
 #include "lv_xml_private.h"
-#include <stdlib/lv_string.h>
+#include <lvgl.h>
 
 /*********************
  *      DEFINES

@@ -37,7 +37,7 @@ set(HELIX_TEST_DIR   ${CMAKE_CURRENT_SOURCE_DIR})
 # helix-xml repo root (holds helix_xml.h and src/)
 get_filename_component(HELIX_XML_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/.. ABSOLUTE)
 
-set(HELIX_LVGL_TAG "v9.5.0" CACHE STRING "LVGL git tag to test against")
+set(HELIX_LVGL_TAG "v9.6.0" CACHE STRING "LVGL git tag to test against")
 
 # ---------------------------------------------------------------------------
 # LVGL

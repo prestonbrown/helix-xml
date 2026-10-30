@@ -16,7 +16,7 @@
 #include "lv_xml.h"
 #include "lv_xml_utils.h"
 #include "lv_xml_component_private.h"
-#include <misc/lv_fs.h>
+#include <lvgl.h>
 #include "../libs/expat/expat.h"
 #include <display/lv_display_private.h>
 #include <core/lv_obj_private.h>

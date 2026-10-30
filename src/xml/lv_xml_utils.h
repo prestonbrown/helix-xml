@@ -15,11 +15,10 @@ extern "C" {
 /*********************
  *      INCLUDES
  *********************/
-#include <lv_conf_internal.h>
+#include <lvgl.h>
 #if LV_USE_XML
 
 #include LV_STDINT_INCLUDE
-#include <misc/lv_color.h>
 
 /**********************
  * GLOBAL PROTOTYPES

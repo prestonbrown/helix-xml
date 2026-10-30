@@ -62,9 +62,8 @@
 
 #if LV_USE_TRANSLATION
 
-#include <others/translation/lv_translation.h>
+#include <lvgl.h>
 #include <core/lv_global.h>
-#include <misc/lv_ll.h>
 
 #include "xml/lv_xml_translation.h"
 

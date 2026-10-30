@@ -1,6 +1,6 @@
 # helix-xml
 
-A declarative XML UI engine for [LVGL](https://lvgl.io) 9.5+. Loads components, screens, styles,
+A declarative XML UI engine for [LVGL](https://lvgl.io) 9.6. Loads components, screens, styles,
 subjects and data bindings from XML at runtime — no code generation, no build step.
 
 **License:** MIT. See [`LICENSE`](LICENSE).
@@ -122,8 +122,9 @@ condition that needs one is a single expression:
 ## Building it into a project
 
 helix-xml is source you compile alongside LVGL — there is no build system here, deliberately.
-It needs LVGL **9.5 or newer** (9.5 is the first release with no XML of its own, so nothing
-collides).
+It needs LVGL **9.6**, the release it is built and tested against: it includes LVGL's public
+headers from the `include/` tree that 9.6 introduced, and 9.5 onward has no XML of its own, so
+nothing collides.
 
 There is nothing to configure, nothing to install, and no CMake package or exported target to
 find. The one CMake file in the repository is `tests/CMakeLists.txt`, and it exists solely to
@@ -186,14 +187,14 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
-That is the whole setup. CMake fetches LVGL **v9.5.0** with `FetchContent` (the tag is
+That is the whole setup. CMake fetches LVGL **v9.6.0** with `FetchContent` (the tag is
 `HELIX_LVGL_TAG` in `tests/CMakeLists.txt`), compiles helix-xml against it as a static
 library, and builds one executable per file in `tests/cases/`: **402 tests across 21
 executables**, a couple of seconds end to end.
 
 `tests/lv_conf.h` is the pinned configuration for the test build, derived from LVGL 9.5.0's
-`lv_conf_template.h` with the switches the XML engine needs turned on. It is deliberately not
-synced with any consumer's `lv_conf.h` - the tests must not inherit whatever the consuming
+`lv_conf_template.h` with 9.6's renamed options applied and the switches the XML engine needs
+turned on. It is deliberately not synced with any consumer's `lv_conf.h` - the tests must not inherit whatever the consuming
 application happens to configure.
 
 ### Bring your own LVGL
@@ -215,7 +216,7 @@ into one readable message instead.
 If you want a checkout on disk, clone upstream yourself:
 
 ```
-git clone --depth 1 --branch v9.5.0 https://github.com/lvgl/lvgl.git /tmp/lvgl-pristine
+git clone --depth 1 --branch v9.6.0 https://github.com/lvgl/lvgl.git /tmp/lvgl-pristine
 cmake -S tests -B build -DLVGL_DIR=/tmp/lvgl-pristine
 ```
 

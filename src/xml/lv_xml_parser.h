@@ -16,9 +16,8 @@ extern "C" {
 /*********************
  *      INCLUDES
  *********************/
-#include <misc/lv_types.h>
+#include <lvgl.h>
 #include "lv_xml_types.h"
-#include <misc/lv_style.h>
 #if LV_USE_XML
 
 #include "lv_xml_component.h"

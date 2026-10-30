@@ -65,7 +65,7 @@
 
 #include <lvgl.h>
 #if LV_USE_TRANSLATION
-    #include <others/translation/lv_translation.h>
+    #include <lvgl.h>
 #endif
 
 /* Log capture: the scan reports every per-file problem through LV_LOG_WARN and

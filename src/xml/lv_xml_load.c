@@ -14,9 +14,7 @@
 #if LV_USE_XML
 
 #include "lv_xml_private.h"
-#include <misc/lv_fs.h>
-#include <libs/fsdrv/lv_fsdrv.h>
-#include <misc/lv_ll.h>
+#include <lvgl.h>
 #include "../libs/expat/expat.h"
 
 /*********************
@@ -226,7 +224,14 @@ static lv_result_t load_all_recursive(char * path_buf, const char * path)
             break;
         }
 
-        int full_path_len = lv_fs_path_join(NULL, 0, path, path_buf);
+        /* LVGL 9.6 returns -1 for a NULL buffer or a zero size, so the snprintf-style
+         * length query needs a real (one-byte) buffer. */
+        char measure;
+        int full_path_len = lv_fs_path_join(&measure, sizeof(measure), path, path_buf);
+        if(full_path_len < 0) {
+            ret = LV_RESULT_INVALID;
+            goto dir_close_out;
+        }
         char * full_path = lv_malloc(full_path_len + 1);
         LV_ASSERT_MALLOC(full_path);
         lv_fs_path_join(full_path, full_path_len + 1, path, path_buf);

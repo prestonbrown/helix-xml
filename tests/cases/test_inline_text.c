@@ -47,7 +47,7 @@
 #include "helpers/xml_assert.h"
 
 #if LV_USE_TRANSLATION
-#include <others/translation/lv_translation.h>
+#include <lvgl.h>
 #include "xml/lv_xml_translation.h"
 #endif
 

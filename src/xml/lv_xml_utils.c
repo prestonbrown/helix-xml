@@ -9,8 +9,7 @@
  *      INCLUDES
  *********************/
 #include "lv_xml_utils.h"
-#include <stdlib/lv_string.h>
-#include <misc/lv_log.h>
+#include <lvgl.h>
 #if LV_USE_XML
 
 #if LV_USE_STDLIB_STRING == LV_STDLIB_CLIB

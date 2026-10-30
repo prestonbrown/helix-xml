@@ -11,8 +11,7 @@
 #include "lv_xml_widget.h"
 #include "lv_xml_component_private.h"
 #include "lv_xml_parser.h"
-#include <stdlib/lv_string.h>
-#include <stdlib/lv_mem.h>
+#include <lvgl.h>
 
 #if LV_USE_XML
 

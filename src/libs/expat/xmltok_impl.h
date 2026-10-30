@@ -31,7 +31,7 @@
    USE OR OTHER DEALINGS IN THE SOFTWARE.
 */
 
-#include <lv_conf_internal.h>
+#include <include/lvgl/config/lv_conf_internal.h>
 #if LV_USE_XML
 
 enum {

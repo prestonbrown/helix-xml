@@ -925,6 +925,45 @@ static void test_unbind_is_null_safe(void)
  * Deleting the owner is the other half of the free-once design: the binding
  * detaches itself, and later subject changes must not reach the callback.
  */
+/* A panel's subject goes with the panel while the widget and a longer-lived subject
+ * stay. The value must be taken from a subject whose storage may already be gone. */
+static void test_a_deinitialised_subject_stops_the_binding_whichever_subject_fires(void)
+{
+    subjects_reset();
+
+    lv_obj_t * owner = lv_obj_create(helix_test_env_screen());
+    bind_probe_t probe = {0, 0};
+    lv_xml_expr_bind_t * h = lv_xml_expr_bind(must_compile("a + b"), owner, bind_probe_cb, &probe);
+    TEST_ASSERT_EQUAL_INT(1, probe.calls);
+
+    lv_subject_deinit(&g_subs[1]);
+    lv_subject_set_int(&g_subs[0], 5);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(1, probe.calls, "the expression read a deinitialised subject");
+
+    lv_subject_set_int(&g_subs[0], 6);
+    TEST_ASSERT_EQUAL_INT(1, probe.calls);
+
+    lv_xml_expr_unbind(h);
+    subjects_reset();
+}
+
+static void test_unbind_after_a_subject_was_deinitialised(void)
+{
+    subjects_reset();
+
+    lv_obj_t * owner = lv_obj_create(helix_test_env_screen());
+    bind_probe_t probe = {0, 0};
+    lv_xml_expr_bind_t * h = lv_xml_expr_bind(must_compile("a + b"), owner, bind_probe_cb, &probe);
+
+    lv_subject_deinit(&g_subs[1]);
+    lv_xml_expr_unbind(h); /* the deinitialised subject's observer is gone: not removed twice */
+
+    lv_subject_set_int(&g_subs[0], 5);
+    TEST_ASSERT_EQUAL_INT(1, probe.calls);
+    lv_obj_delete(owner);
+    subjects_reset();
+}
+
 static void test_deleting_the_owner_detaches_the_binding(void)
 {
     subjects_reset();
@@ -1376,6 +1415,8 @@ int main(void)
     RUN_TEST(test_unbind_detaches_the_binding);
     RUN_TEST(test_unbind_is_null_safe);
     RUN_TEST(test_deleting_the_owner_detaches_the_binding);
+    RUN_TEST(test_a_deinitialised_subject_stops_the_binding_whichever_subject_fires);
+    RUN_TEST(test_unbind_after_a_subject_was_deinitialised);
     RUN_TEST(test_bind_of_a_null_expression_is_a_constant_zero);
     RUN_TEST(test_the_bind_lifecycle_returns_the_heap_to_steady_state);
 

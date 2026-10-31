@@ -244,10 +244,33 @@ struct lv_xml_expr_bind_t {
 };
 typedef struct lv_xml_expr_bind_t expr_bind_t;
 
+/* Deinitialising a subject removes its observer, and with it the hook that
+ * observer keeps on the owner, without telling anyone. That hook is the one trace
+ * readable without touching the subject, whose storage may be gone. */
+static bool expr_bind_observer_attached(const expr_bind_t * b, const lv_observer_t * o){
+    uint32_t count = lv_obj_get_event_count(b->owner);
+    for(uint32_t i=0;i<count;i++){
+        lv_event_dsc_t * dsc = lv_obj_get_event_dsc(b->owner, i);
+        if(dsc && lv_event_dsc_get_user_data(dsc) == o) return true;
+    }
+    return false;
+}
+
+/* The expression reads every subject it names, so it stops with the first to go. */
+static bool expr_bind_all_attached(const expr_bind_t * b){
+    for(size_t i=0;i<b->observer_count;i++){
+        if(b->observers[i] && !expr_bind_observer_attached(b, b->observers[i])) return false;
+    }
+    return true;
+}
+
 static void expr_bind_observer_cb(lv_observer_t * obs, lv_subject_t * subject){
     LV_UNUSED(subject);
     expr_bind_t * b = obs->user_data;
     if(b->registering) return;   /* suppress the add-time fire; see explicit fire below */
+    /* Stays subscribed: removing this observer here would pull it from the list
+     * subject_notify() is walking. Every later fire stops here too. */
+    if(!expr_bind_all_attached(b)) return;
     b->cb(b->user_data, lv_xml_expr_eval(b->expr));
 }
 
@@ -305,8 +328,11 @@ void lv_xml_expr_unbind(lv_xml_expr_bind_t * b){
     /* Detach every per-subject observer BEFORE freeing anything - each
      * observer's target is `owner`, so lv_observer_remove() also strips the
      * per-observer unsubscribe-on-delete hook it registered on `owner`. */
+    /* A deinitialised subject took its observer with it: only those still attached. */
     for(size_t i=0;i<b->observer_count;i++){
-        if(b->observers && b->observers[i]) lv_observer_remove(b->observers[i]);
+        if(b->observers[i] && expr_bind_observer_attached(b, b->observers[i])) {
+            lv_observer_remove(b->observers[i]);
+        }
     }
     lv_free(b->observers);
     /* Remove the shared delete-cb hook so a later owner delete does not double-free. */

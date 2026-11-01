@@ -241,25 +241,55 @@ struct lv_xml_expr_bind_t {
     lv_xml_expr_t * expr; void (*cb)(void *, int32_t); void * user_data;
     lv_obj_t * owner; bool registering;
     lv_observer_t ** observers; size_t observer_count;
+    bool frozen;
 };
 typedef struct lv_xml_expr_bind_t expr_bind_t;
 
-/* Deinitialising a subject removes its observer, and with it the hook that
- * observer keeps on the owner, without telling anyone. That hook is the one trace
- * readable without touching the subject, whose storage may be gone. */
+static void expr_bind_observer_cb(lv_observer_t * obs, lv_subject_t * subject);
+
+/* The hook lv_subject_add_observer_obj() puts on the owner. LVGL keeps its callback
+ * private, so it is read off the first hook made; user_data alone could be anything
+ * allocated at a freed observer's address. */
+static lv_event_cb_t expr_bind_hook_cb;
+
+static void expr_bind_note_hook(const expr_bind_t * b, const lv_observer_t * o){
+    if(expr_bind_hook_cb) return;
+    uint32_t count = lv_obj_get_event_count(b->owner);
+    for(uint32_t i=count;i>0;i--){
+        lv_event_dsc_t * dsc = lv_obj_get_event_dsc(b->owner, i-1);
+        if(dsc && lv_event_dsc_get_user_data(dsc) == o){
+            expr_bind_hook_cb = lv_event_dsc_get_cb(dsc);
+            return;
+        }
+    }
+}
+
+/* Deinitialising a subject removes its observer, and with it the hook that observer
+ * keeps on the owner, without telling anyone. That hook is the one trace readable
+ * without touching the subject, whose storage may be gone. A hook names a live
+ * observer, which may still be another binding's at a reused address. */
 static bool expr_bind_observer_attached(const expr_bind_t * b, const lv_observer_t * o){
+    if(o == NULL) return false;
     uint32_t count = lv_obj_get_event_count(b->owner);
     for(uint32_t i=0;i<count;i++){
         lv_event_dsc_t * dsc = lv_obj_get_event_dsc(b->owner, i);
-        if(dsc && lv_event_dsc_get_user_data(dsc) == o) return true;
+        if(dsc && lv_event_dsc_get_user_data(dsc) == o && lv_event_dsc_get_cb(dsc) == expr_bind_hook_cb){
+            return o->cb == expr_bind_observer_cb && o->user_data == b;
+        }
     }
     return false;
 }
 
 /* The expression reads every subject it names, so it stops with the first to go. */
-static bool expr_bind_all_attached(const expr_bind_t * b){
+static bool expr_bind_all_attached(expr_bind_t * b){
     for(size_t i=0;i<b->observer_count;i++){
-        if(b->observers[i] && !expr_bind_observer_attached(b, b->observers[i])) return false;
+        if(!expr_bind_observer_attached(b, b->observers[i])){
+            if(!b->frozen){
+                b->frozen = true;
+                LV_LOG_INFO("expr: a subject of this binding was deinitialised; it keeps its last value");
+            }
+            return false;
+        }
     }
     return true;
 }
@@ -286,7 +316,7 @@ lv_xml_expr_bind_t * lv_xml_expr_bind(lv_xml_expr_t * expr, lv_obj_t * owner,
     expr_bind_t * b = lv_malloc(sizeof(expr_bind_t));
     if(b == NULL) { lv_xml_expr_free(expr); return NULL; }
     b->expr = expr; b->cb = cb; b->user_data = user_data; b->owner = owner; b->registering = true;
-    b->observers = NULL; b->observer_count = 0;
+    b->observers = NULL; b->observer_count = 0; b->frozen = false;
 
     /* One observer per distinct subject, tied to `owner`; do NOT auto-free the
      * shared context (it is freed exactly once by expr_bind_delete_cb or
@@ -309,7 +339,10 @@ lv_xml_expr_bind_t * lv_xml_expr_bind(lv_xml_expr_t * expr, lv_obj_t * owner,
     for(size_t i=0;i<n;i++){
         lv_observer_t * o = lv_subject_add_observer_obj(lv_xml_expr_subject_at(expr,i),
                                                         expr_bind_observer_cb, owner, b);
-        if(o) o->auto_free_user_data = 0;
+        if(o) {
+            o->auto_free_user_data = 0;
+            expr_bind_note_hook(b, o);
+        }
         if(b->observers) b->observers[i] = o;
     }
     b->observer_count = n;
@@ -318,8 +351,9 @@ lv_xml_expr_bind_t * lv_xml_expr_bind(lv_xml_expr_t * expr, lv_obj_t * owner,
     /* Single free-once hook on owner deletion. */
     lv_obj_add_event_cb(owner, expr_bind_delete_cb, LV_EVENT_DELETE, b);
 
-    /* Fire once now so the target reflects the initial value. */
-    cb(user_data, lv_xml_expr_eval(expr));
+    /* Fire once now so the target reflects the initial value, unless a subject was
+     * already deinitialised and refused its observer. */
+    if(expr_bind_all_attached(b)) cb(user_data, lv_xml_expr_eval(expr));
     return b;
 }
 
@@ -330,7 +364,7 @@ void lv_xml_expr_unbind(lv_xml_expr_bind_t * b){
      * per-observer unsubscribe-on-delete hook it registered on `owner`. */
     /* A deinitialised subject took its observer with it: only those still attached. */
     for(size_t i=0;i<b->observer_count;i++){
-        if(b->observers[i] && expr_bind_observer_attached(b, b->observers[i])) {
+        if(expr_bind_observer_attached(b, b->observers[i])) {
             lv_observer_remove(b->observers[i]);
         }
     }

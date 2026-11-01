@@ -32,6 +32,7 @@
  */
 
 #include <stdint.h>
+#include <lvgl_private.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -925,6 +926,80 @@ static void test_unbind_is_null_safe(void)
  * Deleting the owner is the other half of the free-once design: the binding
  * detaches itself, and later subject changes must not reach the callback.
  */
+/* A panel's subject goes with the panel while the widget and a longer-lived subject
+ * stay. The value must be taken from a subject whose storage may already be gone. */
+static void test_a_deinitialised_subject_stops_the_binding_whichever_subject_fires(void)
+{
+    subjects_reset();
+
+    lv_obj_t * owner = lv_obj_create(helix_test_env_screen());
+    bind_probe_t probe = {0, 0};
+    lv_xml_expr_bind_t * h = lv_xml_expr_bind(must_compile("a + b"), owner, bind_probe_cb, &probe);
+    TEST_ASSERT_EQUAL_INT(1, probe.calls);
+
+    lv_subject_deinit(&g_subs[1]);
+    lv_subject_set_int(&g_subs[0], 5);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(1, probe.calls, "the expression read a deinitialised subject");
+
+    lv_subject_set_int(&g_subs[0], 6);
+    TEST_ASSERT_EQUAL_INT(1, probe.calls);
+
+    lv_xml_expr_unbind(h);
+    subjects_reset();
+}
+
+static void test_unbind_after_a_subject_was_deinitialised(void)
+{
+    subjects_reset();
+
+    lv_obj_t * owner = lv_obj_create(helix_test_env_screen());
+    bind_probe_t probe = {0, 0};
+    lv_xml_expr_bind_t * h = lv_xml_expr_bind(must_compile("a + b"), owner, bind_probe_cb, &probe);
+
+    lv_subject_deinit(&g_subs[1]);
+    lv_xml_expr_unbind(h); /* the deinitialised subject's observer is gone: not removed twice */
+
+    lv_subject_set_int(&g_subs[0], 5);
+    TEST_ASSERT_EQUAL_INT(1, probe.calls);
+    lv_obj_delete(owner);
+    subjects_reset();
+}
+
+static void noop_event_cb(lv_event_t * e)
+{
+    LV_UNUSED(e);
+}
+
+/* The allocator may hand a freed observer's address to anything the owner registers
+ * next, so that is placed there outright. */
+static void test_an_event_at_a_freed_observer_address_does_not_revive_a_binding(void)
+{
+    subjects_reset();
+
+    lv_obj_t * owner = lv_obj_create(helix_test_env_screen());
+    bind_probe_t probe = {0, 0};
+    const uint32_t before = lv_obj_get_event_count(owner);
+    lv_xml_expr_bind_t * h = lv_xml_expr_bind(must_compile("a + b"), owner, bind_probe_cb, &probe);
+    void * freed_observer = NULL;
+    for(uint32_t i = before; i < lv_obj_get_event_count(owner); i++) {
+        lv_event_dsc_t * dsc = lv_obj_get_event_dsc(owner, i);
+        if(lv_event_dsc_get_user_data(dsc) == h) continue; /* the binding's own delete hook */
+        lv_observer_t * o = lv_event_dsc_get_user_data(dsc);
+        if(o->subject == &g_subs[1]) freed_observer = o;
+    }
+    TEST_ASSERT_NOT_NULL(freed_observer);
+
+    lv_subject_deinit(&g_subs[1]);
+    lv_obj_add_event_cb(owner, noop_event_cb, LV_EVENT_CLICKED, freed_observer);
+
+    lv_subject_set_int(&g_subs[0], 5);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(1, probe.calls, "a stopped binding came back");
+
+    lv_xml_expr_unbind(h); /* would free that address a second time */
+    lv_obj_delete(owner);
+    subjects_reset();
+}
+
 static void test_deleting_the_owner_detaches_the_binding(void)
 {
     subjects_reset();
@@ -1376,6 +1451,9 @@ int main(void)
     RUN_TEST(test_unbind_detaches_the_binding);
     RUN_TEST(test_unbind_is_null_safe);
     RUN_TEST(test_deleting_the_owner_detaches_the_binding);
+    RUN_TEST(test_a_deinitialised_subject_stops_the_binding_whichever_subject_fires);
+    RUN_TEST(test_unbind_after_a_subject_was_deinitialised);
+    RUN_TEST(test_an_event_at_a_freed_observer_address_does_not_revive_a_binding);
     RUN_TEST(test_bind_of_a_null_expression_is_a_constant_zero);
     RUN_TEST(test_the_bind_lifecycle_returns_the_heap_to_steady_state);
 

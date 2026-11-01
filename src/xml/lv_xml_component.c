@@ -581,7 +581,7 @@ lv_result_t lv_xml_register_component_from_file(const char * path)
  *   leave those observers dangling, and the widget's later LV_EVENT_DELETE
  *   (e.g. NavigationManager::rebuild_active_views on a HELIX_HOT_RELOAD
  *   re-register, which deletes the old widgets AFTER the component is
- *   unregistered) would lv_observer_remove() a freed subject -> UAF.
+ *   unregistered) would lv_observer_delete() a freed subject -> UAF.
  *   lv_subject_deinit only walks subs_ll and removes observers; it does not
  *   touch value/prev_value, so the string buffers are freed separately.
  *
@@ -1301,7 +1301,7 @@ static void subject_expr_record_release(lv_xml_subject_expr_t * record)
     if(record == NULL) return;
 
     for(uint32_t i = 0; i < record->observer_count; i++) {
-        if(record->observers[i]) lv_observer_remove(record->observers[i]);
+        if(record->observers[i]) lv_observer_delete(record->observers[i]);
     }
     lv_free(record->observers);
     lv_xml_expr_free(record->expr);
@@ -1397,7 +1397,7 @@ static void process_subject_expr_element(lv_xml_parser_state_t * state, const ch
      * double-free it (lv_subject_add_observer zero-inits auto_free_user_data
      * off, which is what we want).
      *
-     * We retain every observer handle so scope teardown can lv_observer_remove()
+     * We retain every observer handle so scope teardown can lv_observer_delete()
      * it BEFORE freeing `ctx`. Without this, an observer left attached to a
      * still-live *global* input subject would fire subject_expr_observer_cb on
      * a freed `ctx` (use-after-free) the next time that global subject changed. */

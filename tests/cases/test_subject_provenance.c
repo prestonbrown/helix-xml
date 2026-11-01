@@ -1085,7 +1085,7 @@ static void test_a_hot_reload_cycle_carries_borrowed_subjects_into_the_fresh_sco
  * resolved for them. If unregister frees a subject WITHOUT first detaching
  * those observers, a widget deleted afterwards - the order a hot reload
  * produces, since the panel rebuild deletes old widgets AFTER the component was
- * unregistered - calls lv_observer_remove() on freed memory.
+ * unregistered - calls lv_observer_delete() on freed memory.
  *
  * With a BORROWED subject the whole sequence is directly observable, because
  * the subject outlives everything: the observer must still be attached after

@@ -234,7 +234,7 @@ lv_subject_t * lv_xml_expr_subject_at(const lv_xml_expr_t * e, size_t i){ return
  * observer is added, so the initial value is delivered exactly once (by the
  * explicit fire in lv_xml_expr_bind) rather than once per distinct subject.
  * `observers`/`observer_count` retain every per-subject observer handle so
- * lv_xml_expr_unbind can lv_observer_remove() them before the owner (or its
+ * lv_xml_expr_unbind can lv_observer_delete() them before the owner (or its
  * subjects) go away - mirrors the <subject_expr> teardown in
  * lv_xml_component.c. */
 struct lv_xml_expr_bind_t {
@@ -360,12 +360,12 @@ lv_xml_expr_bind_t * lv_xml_expr_bind(lv_xml_expr_t * expr, lv_obj_t * owner,
 void lv_xml_expr_unbind(lv_xml_expr_bind_t * b){
     if(b == NULL) return;
     /* Detach every per-subject observer BEFORE freeing anything - each
-     * observer's target is `owner`, so lv_observer_remove() also strips the
+     * observer's target is `owner`, so lv_observer_delete() also strips the
      * per-observer unsubscribe-on-delete hook it registered on `owner`. */
     /* A deinitialised subject took its observer with it: only those still attached. */
     for(size_t i=0;i<b->observer_count;i++){
         if(expr_bind_observer_attached(b, b->observers[i])) {
-            lv_observer_remove(b->observers[i]);
+            lv_observer_delete(b->observers[i]);
         }
     }
     lv_free(b->observers);

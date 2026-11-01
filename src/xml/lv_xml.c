@@ -2057,12 +2057,12 @@ void lv_xml_frag_record_free(xml_frag_record_t * r)
     if(r == NULL) return;
     /*<repeat> reactive count observer: the instance and its count subject are still
      *alive on this unregister-sweep path (called BEFORE subjects_ll teardown), so
-     *remove the observer here — free_heap no longer does. lv_observer_remove also
+     *remove the observer here — free_heap no longer does. lv_observer_delete also
      *strips the view root's unsubscribe_on_delete_cb (for_obj+target), so the later
      *instance delete cannot re-remove a freed node. Done before nulling view_root so
      *the target is still valid; a no-op for <if> records (observer is NULL).*/
     if(r->observer) {
-        lv_observer_remove(r->observer);
+        lv_observer_delete(r->observer);
         r->observer = NULL;
     }
     if(r->view_root) {

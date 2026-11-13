@@ -139,7 +139,7 @@ void lv_xml_obj_apply(lv_xml_parser_state_t * state, const char ** attrs)
         else if(lv_streq("scrollbar_mode", name)) lv_obj_set_scrollbar_mode(item, lv_xml_scrollbar_mode_to_enum(value));
         else if(lv_streq("scroll_dir", name)) lv_obj_set_scroll_dir(item, lv_xml_dir_to_enum(value));
 
-        else if(lv_streq("hidden", name))               lv_obj_set_flag(item, LV_OBJ_FLAG_HIDDEN, lv_xml_to_bool(value));
+        else if(lv_streq("hidden", name))               lv_obj_set_hidden(item, lv_xml_to_bool(value));
         else if(lv_streq("hidden_if_prop_eq", name)) {
             /* Format: "resolved_value|ref_value" — hide if resolved_value == ref_value.
              * By this point $prop references are already resolved by resolve_params(),
@@ -150,7 +150,7 @@ void lv_xml_obj_apply(lv_xml_parser_state_t * state, const char ** attrs)
                 const char * ref = sep + 1;
                 size_t ref_len = lv_strlen(ref);
                 if(val_len == ref_len && (val_len == 0 || lv_memcmp(value, ref, val_len) == 0)) {
-                    lv_obj_add_flag(item, LV_OBJ_FLAG_HIDDEN);
+                    lv_obj_set_hidden(item, true);
                 }
             }
             else {
@@ -166,7 +166,7 @@ void lv_xml_obj_apply(lv_xml_parser_state_t * state, const char ** attrs)
                 size_t ref_len = lv_strlen(ref);
                 bool eq = (val_len == ref_len && (val_len == 0 || lv_memcmp(value, ref, val_len) == 0));
                 if(!eq) {
-                    lv_obj_add_flag(item, LV_OBJ_FLAG_HIDDEN);
+                    lv_obj_set_hidden(item, true);
                 }
             }
             else {
@@ -177,53 +177,53 @@ void lv_xml_obj_apply(lv_xml_parser_state_t * state, const char ** attrs)
         else if(lv_streq("hidden_if_empty", name)) {
             /* Shortcut for hidden_if_prop_eq="$prop|" — hide if resolved value is empty */
             if(value[0] == '\0') {
-                lv_obj_add_flag(item, LV_OBJ_FLAG_HIDDEN);
+                lv_obj_set_hidden(item, true);
             }
         }
-        else if(lv_streq("clickable", name))            lv_obj_set_flag(item, LV_OBJ_FLAG_CLICKABLE, lv_xml_to_bool(value));
-        else if(lv_streq("click_focusable", name))      lv_obj_set_flag(item, LV_OBJ_FLAG_CLICK_FOCUSABLE,
+        else if(lv_streq("clickable", name))            lv_obj_set_clickable(item, lv_xml_to_bool(value));
+        else if(lv_streq("click_focusable", name))      lv_obj_set_click_focusable(item,
                                                                             lv_xml_to_bool(value));
-        else if(lv_streq("checkable", name))            lv_obj_set_flag(item, LV_OBJ_FLAG_CHECKABLE, lv_xml_to_bool(value));
-        else if(lv_streq("scrollable", name))           lv_obj_set_flag(item, LV_OBJ_FLAG_SCROLLABLE, lv_xml_to_bool(value));
-        else if(lv_streq("scroll_elastic", name))       lv_obj_set_flag(item, LV_OBJ_FLAG_SCROLL_ELASTIC,
+        else if(lv_streq("checkable", name))            lv_obj_set_checkable(item, lv_xml_to_bool(value));
+        else if(lv_streq("scrollable", name))           lv_obj_set_scrollable(item, lv_xml_to_bool(value));
+        else if(lv_streq("scroll_elastic", name))       lv_obj_set_scroll_elastic(item,
                                                                             lv_xml_to_bool(value));
-        else if(lv_streq("scroll_momentum", name))      lv_obj_set_flag(item, LV_OBJ_FLAG_SCROLL_MOMENTUM,
+        else if(lv_streq("scroll_momentum", name))      lv_obj_set_scroll_momentum(item,
                                                                             lv_xml_to_bool(value));
-        else if(lv_streq("scroll_one", name))           lv_obj_set_flag(item, LV_OBJ_FLAG_SCROLL_ONE, lv_xml_to_bool(value));
-        else if(lv_streq("scroll_chain_hor", name))     lv_obj_set_flag(item, LV_OBJ_FLAG_SCROLL_CHAIN_HOR,
+        else if(lv_streq("scroll_one", name))           lv_obj_set_scroll_one(item, lv_xml_to_bool(value));
+        else if(lv_streq("scroll_chain_hor", name))     lv_obj_set_scroll_chain_hor(item,
                                                                             lv_xml_to_bool(value));
-        else if(lv_streq("scroll_chain_ver", name))     lv_obj_set_flag(item, LV_OBJ_FLAG_SCROLL_CHAIN_VER,
+        else if(lv_streq("scroll_chain_ver", name))     lv_obj_set_scroll_chain_ver(item,
                                                                             lv_xml_to_bool(value));
-        else if(lv_streq("scroll_chain", name))         lv_obj_set_flag(item, LV_OBJ_FLAG_SCROLL_CHAIN,
+        else if(lv_streq("scroll_chain", name))         lv_obj_set_scroll_chain(item,
                                                                             lv_xml_to_bool(value));
-        else if(lv_streq("scroll_on_focus", name))      lv_obj_set_flag(item, LV_OBJ_FLAG_SCROLL_ON_FOCUS,
+        else if(lv_streq("scroll_on_focus", name))      lv_obj_set_scroll_on_focus(item,
                                                                             lv_xml_to_bool(value));
-        else if(lv_streq("scroll_with_arrow", name))    lv_obj_set_flag(item, LV_OBJ_FLAG_SCROLL_WITH_ARROW,
+        else if(lv_streq("scroll_with_arrow", name))    lv_obj_set_scroll_with_arrow(item,
                                                                             lv_xml_to_bool(value));
-        else if(lv_streq("snappable", name))            lv_obj_set_flag(item, LV_OBJ_FLAG_SNAPPABLE, lv_xml_to_bool(value));
-        else if(lv_streq("press_lock", name))           lv_obj_set_flag(item, LV_OBJ_FLAG_PRESS_LOCK, lv_xml_to_bool(value));
-        else if(lv_streq("event_bubble", name))         lv_obj_set_flag(item, LV_OBJ_FLAG_EVENT_BUBBLE,
+        else if(lv_streq("snappable", name))            lv_obj_set_snappable(item, lv_xml_to_bool(value));
+        else if(lv_streq("press_lock", name))           lv_obj_set_press_lock(item, lv_xml_to_bool(value));
+        else if(lv_streq("event_bubble", name))         lv_obj_set_event_bubble(item,
                                                                             lv_xml_to_bool(value));
-        else if(lv_streq("event_trickle", name))        lv_obj_set_flag(item, LV_OBJ_FLAG_EVENT_TRICKLE,
+        else if(lv_streq("event_trickle", name))        lv_obj_set_event_trickle(item,
                                                                             lv_xml_to_bool(value));
-        else if(lv_streq("state_trickle", name))       lv_obj_set_flag(item, LV_OBJ_FLAG_STATE_TRICKLE,
+        else if(lv_streq("state_trickle", name))       lv_obj_set_state_trickle(item,
                                                                            lv_xml_to_bool(value));
-        else if(lv_streq("gesture_bubble", name))       lv_obj_set_flag(item, LV_OBJ_FLAG_GESTURE_BUBBLE,
+        else if(lv_streq("gesture_bubble", name))       lv_obj_set_gesture_bubble(item,
                                                                             lv_xml_to_bool(value));
-        else if(lv_streq("adv_hittest", name))          lv_obj_set_flag(item, LV_OBJ_FLAG_ADV_HITTEST,
+        else if(lv_streq("adv_hittest", name))          lv_obj_set_adv_hittest(item,
                                                                             lv_xml_to_bool(value));
-        else if(lv_streq("ignore_layout", name))        lv_obj_set_flag(item, LV_OBJ_FLAG_IGNORE_LAYOUT,
+        else if(lv_streq("ignore_layout", name))        lv_obj_set_ignore_layout(item,
                                                                             lv_xml_to_bool(value));
-        else if(lv_streq("floating", name))             lv_obj_set_flag(item, LV_OBJ_FLAG_FLOATING, lv_xml_to_bool(value));
-        else if(lv_streq("send_draw_task_events", name))lv_obj_set_flag(item, LV_OBJ_FLAG_SEND_DRAW_TASK_EVENTS,
+        else if(lv_streq("floating", name))             lv_obj_set_floating(item, lv_xml_to_bool(value));
+        else if(lv_streq("send_draw_task_events", name))lv_obj_set_send_draw_task_events(item,
                                                                             lv_xml_to_bool(value));
-        else if(lv_streq("overflow_visible", name))     lv_obj_set_flag(item, LV_OBJ_FLAG_OVERFLOW_VISIBLE,
+        else if(lv_streq("overflow_visible", name))     lv_obj_set_overflow_visible(item,
                                                                             lv_xml_to_bool(value));
 #ifdef LV_OBJ_FLAG_RADIO_BUTTON
         else if(lv_streq("radio_button", name))     lv_obj_set_flag(item, LV_OBJ_FLAG_RADIO_BUTTON,
                                                                         lv_xml_to_bool(value));
 #endif
-        else if(lv_streq("flex_in_new_track", name))    lv_obj_set_flag(item, LV_OBJ_FLAG_FLEX_IN_NEW_TRACK,
+        else if(lv_streq("flex_in_new_track", name))    lv_obj_set_flex_in_new_track(item,
                                                                             lv_xml_to_bool(value));
 
         else if(lv_streq("checked", name))  lv_obj_set_state(item, LV_STATE_CHECKED, lv_xml_to_bool(value));

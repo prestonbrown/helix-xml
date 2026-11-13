@@ -58,7 +58,7 @@ static void helix_test_lvgl_start(void)
     /* LV_COLOR_DEPTH is 32 in tests/lv_conf.h. Ask LVGL for the pixel size
      * rather than hardcoding it, so changing the colour depth cannot silently
      * under-allocate the buffer. */
-    const uint32_t px_size = lv_color_format_get_size(LV_COLOR_FORMAT_NATIVE);
+    const uint32_t px_size = lv_color_format_get_size(LV_COLOR_FORMAT_DEFAULT);
     const uint32_t buf_size = (uint32_t)HELIX_TEST_DISP_HOR_RES * HELIX_TEST_DISP_VER_RES * px_size;
 
     s_draw_buf = malloc(buf_size);

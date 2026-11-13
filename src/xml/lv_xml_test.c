@@ -427,7 +427,7 @@ static bool execute_step(lv_xml_test_step_t * step, uint32_t slowdown)
             lv_subject_set_int(step->param.subject_set.subject, lv_xml_atoi(step->param.subject_set.value));
         }
         else if(type == LV_SUBJECT_TYPE_STRING) {
-            lv_subject_copy_string(step->param.subject_set.subject, step->param.subject_set.value);
+            lv_subject_set_string(step->param.subject_set.subject, step->param.subject_set.value);
         }
         else {
             LV_LOG_WARN("Not supported subject type %d", type);
@@ -464,8 +464,8 @@ static bool execute_step(lv_xml_test_step_t * step, uint32_t slowdown)
 static lv_obj_t * create_cursor(lv_obj_t * parent)
 {
     lv_obj_t * obj = lv_obj_create(parent);
-    lv_obj_remove_flag(obj, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_remove_flag(obj, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_scrollable(obj, false);
+    lv_obj_set_clickable(obj, false);
     lv_obj_set_size(obj, 30, 30);
     lv_obj_set_style_opa(obj, LV_OPA_50, 0);
     lv_obj_set_style_bg_color(obj, lv_palette_main(LV_PALETTE_ORANGE), 0);

@@ -96,7 +96,7 @@ void * lv_xml_responsive_grid_create(lv_xml_parser_state_t * state, const char *
     lv_obj_set_style_pad_all(obj, 0, LV_PART_MAIN);
     lv_obj_set_style_pad_gap(obj, 0, LV_PART_MAIN);
     lv_obj_set_size(obj, lv_pct(100), LV_SIZE_CONTENT);
-    lv_obj_remove_flag(obj, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollable(obj, false);
     /*The parameters ride on the DELETE handler that frees them; user_data stays the caller's*/
     lv_obj_add_event_cb(obj, params_delete_cb, LV_EVENT_DELETE, p);
     lv_obj_set_style_layout(obj, (uint16_t)layout_id, LV_PART_MAIN);

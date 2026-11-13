@@ -121,7 +121,7 @@ static void test_a_string_subject_declared_with_a_type_attribute_is_typed_and_us
     TEST_ASSERT_EQUAL_STRING_MESSAGE("hi", lv_subject_get_string(s),
                                      "value= was not applied to the subject");
 
-    lv_subject_copy_string(s, "there");
+    lv_subject_set_string(s, "there");
     TEST_ASSERT_EQUAL_STRING_MESSAGE("there", lv_subject_get_string(s),
                                      "the subject did not accept a write - it is not really typed");
 }
@@ -305,7 +305,7 @@ static void test_a_declared_subject_drives_a_binding_in_the_same_component(void)
 
     lv_xml_component_scope_t * scope = lv_xml_component_get_scope("subj_bound");
     TEST_ASSERT_NOT_NULL(scope);
-    lv_subject_copy_string(ASSERT_SUBJECT(scope, "s_msg"), "second");
+    lv_subject_set_string(ASSERT_SUBJECT(scope, "s_msg"), "second");
 
     ASSERT_LABEL_TEXT(msg, "second");
 }

@@ -1822,7 +1822,7 @@ static void xml_frag_expand(lv_xml_parser_state_t * state, xml_frag_capture_t * 
  *  helix::ui::safe_delete_subtree algorithm in pure C: reparent every root into an
  *  off-tree, hidden, layout-less "condemned" sink (a synchronous detach from the
  *  live parent's child list) and then `lv_obj_delete_async` the sink so the actual
- *  destruction happens outside the batch. Never `lv_obj_is_valid()` here [L076]. */
+ *  destruction happens outside the batch. Never `lv_obj_is_in_widget_tree()` here [L076]. */
 static void xml_frag_teardown(xml_frag_record_t * r)
 {
     if(r->roots == NULL || r->root_count == 0) {
@@ -1834,7 +1834,7 @@ static void xml_frag_teardown(xml_frag_record_t * r)
 
     lv_obj_t * condemned = lv_obj_create(lv_layer_top());
     if(condemned) {
-        lv_obj_add_flag(condemned, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_hidden(condemned, true);
         lv_obj_set_size(condemned, 0, 0);
         lv_obj_set_layout(condemned, LV_LAYOUT_NONE);
         for(uint32_t k = 0; k < r->root_count; k++) {

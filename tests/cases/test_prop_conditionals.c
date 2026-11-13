@@ -235,8 +235,8 @@ static void test_a_prop_pipe_hide_is_decided_once_and_never_reasserted(void)
     ASSERT_FLAG(bound, LV_OBJ_FLAG_HIDDEN);
 
     /* Clear both by hand, so neither can pass the final assertions by inertia. */
-    lv_obj_remove_flag(pinned, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_remove_flag(bound, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_hidden(pinned, false);
+    lv_obj_set_hidden(bound, false);
     ASSERT_NO_FLAG(pinned, LV_OBJ_FLAG_HIDDEN);
     ASSERT_NO_FLAG(bound, LV_OBJ_FLAG_HIDDEN);
 

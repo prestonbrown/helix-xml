@@ -131,7 +131,7 @@ static void test_attributes_feed_the_fit(void)
 static void test_is_a_bare_box_laid_out_by_its_own_layout(void)
 {
     lv_obj_t * grid = create_grid();
-    TEST_ASSERT_FALSE_MESSAGE(lv_obj_has_flag(grid, LV_OBJ_FLAG_SCROLLABLE), "grid scrolls by default");
+    TEST_ASSERT_FALSE_MESSAGE(lv_obj_is_scrollable(grid), "grid scrolls by default");
     TEST_ASSERT_EQUAL_INT_MESSAGE(0, lv_obj_get_style_pad_left(grid, LV_PART_MAIN), "grid has padding by default");
     TEST_ASSERT_NOT_EQUAL_MESSAGE(LV_LAYOUT_NONE, lv_obj_get_style_layout(grid, LV_PART_MAIN), "no layout");
     TEST_ASSERT_NOT_EQUAL_MESSAGE(LV_LAYOUT_FLEX, lv_obj_get_style_layout(grid, LV_PART_MAIN), "flex layout");
@@ -157,7 +157,7 @@ static void test_fit_items_counts_only_visible_children(void)
     lv_obj_update_layout(host);
     ASSERT_FIT(1, 500, lv_xml_responsive_grid_get_fit(grid));
 
-    lv_obj_remove_flag(ASSERT_NAMED(host, "b"), LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_hidden(ASSERT_NAMED(host, "b"), false);
     ASSERT_FIT(2, 245, lv_xml_responsive_grid_get_fit(grid));
 }
 

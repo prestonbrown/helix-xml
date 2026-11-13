@@ -122,7 +122,7 @@ static void test_the_loop_index_composes_a_per_iteration_subject_name(void)
 
     /* The binding is live, not a one-off text copy: writing to the subject
      * behind iteration 1 must move that label and only that label. */
-    lv_subject_copy_string(&g_subs[1], "ONE!");
+    lv_subject_set_string(&g_subs[1], "ONE!");
     helix_test_pump(30);
     ASSERT_LABEL_TEXT(lv_obj_get_child(row, 1), "ONE!");
     ASSERT_LABEL_TEXT(lv_obj_get_child(row, 0), "zero");

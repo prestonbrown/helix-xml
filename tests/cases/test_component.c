@@ -284,7 +284,7 @@ static void test_a_subject_typed_prop_produces_a_live_binding(void)
     lv_obj_t * bound = ASSERT_NAMED(inst, "prop_bound");
     ASSERT_LABEL_TEXT(bound, "first");
 
-    lv_subject_copy_string(&s_text_subject, "second");
+    lv_subject_set_string(&s_text_subject, "second");
     helix_test_pump(30);
     ASSERT_LABEL_TEXT(bound, "second");
 }

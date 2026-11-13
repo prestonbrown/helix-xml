@@ -134,8 +134,11 @@ static void write_bits(lv_obj_t * obj, lv_xml_bind_kind_t kind, uint32_t bits, b
         else lv_obj_remove_state(obj, (lv_state_t)bits);
     }
     else {
-        if(on) lv_obj_add_flag(obj, (lv_obj_flag_t)bits);
-        else lv_obj_remove_flag(obj, (lv_obj_flag_t)bits);
+        /*The bits come from the XML at run time and may name a USER_n flag, which has
+         *no per-flag setter*/
+        LV_DEPRECATIONS_IGNORE_BEGIN
+        lv_obj_set_flag(obj, (lv_obj_flag_t)bits, on); /*LV_DEPRECATED_OK: run-time flag mask*/
+        LV_DEPRECATIONS_IGNORE_END
     }
 }
 

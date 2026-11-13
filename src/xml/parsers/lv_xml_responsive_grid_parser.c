@@ -147,7 +147,7 @@ static grid_params_t * find_params(lv_obj_t * obj)
 
 static bool is_laid_out(lv_obj_t * item)
 {
-    return !lv_obj_has_flag_any(item, LV_OBJ_FLAG_IGNORE_LAYOUT | LV_OBJ_FLAG_HIDDEN | LV_OBJ_FLAG_FLOATING);
+    return !(lv_obj_is_ignore_layout(item) || lv_obj_is_hidden(item) || lv_obj_is_floating(item));
 }
 
 static lv_xml_grid_fit_t fit_for(lv_obj_t * cont, const grid_params_t * p)

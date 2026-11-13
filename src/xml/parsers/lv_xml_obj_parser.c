@@ -220,7 +220,7 @@ void lv_xml_obj_apply(lv_xml_parser_state_t * state, const char ** attrs)
         else if(lv_streq("overflow_visible", name))     lv_obj_set_overflow_visible(item,
                                                                             lv_xml_to_bool(value));
 #ifdef LV_OBJ_FLAG_RADIO_BUTTON
-        else if(lv_streq("radio_button", name))     lv_obj_set_flag(item, LV_OBJ_FLAG_RADIO_BUTTON,
+        else if(lv_streq("radio_button", name))     lv_obj_set_radio_button(item,
                                                                         lv_xml_to_bool(value));
 #endif
         else if(lv_streq("flex_in_new_track", name))    lv_obj_set_flex_in_new_track(item,

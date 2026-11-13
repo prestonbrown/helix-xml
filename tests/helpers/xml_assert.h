@@ -178,13 +178,22 @@ static inline const char * helix_xml_assert_name_of(const lv_obj_t * obj)
  * Flags, states, styles
  *--------------------------------------------------------------------------*/
 
+/** Whether @p obj has every bit of @p f. The assertions take any flag, USER_n included,
+ *  and only the generic getter reads those. */
+static inline bool helix_xml_assert_has_flag(const lv_obj_t * obj, lv_obj_flag_t f)
+{
+    LV_DEPRECATIONS_IGNORE_BEGIN
+    return lv_obj_has_flag(obj, f); /*LV_DEPRECATED_OK: generic flag assertion*/
+    LV_DEPRECATIONS_IGNORE_END
+}
+
 /** Assert @p obj has flag @p f set (e.g. LV_OBJ_FLAG_HIDDEN). */
 #define ASSERT_FLAG(obj, f)                                                              \
     do {                                                                                 \
         lv_obj_t * hx_obj_ = (lv_obj_t *)(obj);                                          \
         TEST_ASSERT_NOT_NULL_MESSAGE(hx_obj_, "ASSERT_FLAG on a NULL object");           \
         TEST_ASSERT_TRUE_MESSAGE(                                                        \
-            lv_obj_has_flag(hx_obj_, (f)),                                               \
+            helix_xml_assert_has_flag(hx_obj_, (f)),                                     \
             helix_xml_assert_msgf("\"%s\" is missing flag %s",                            \
                                   helix_xml_assert_name_of(hx_obj_), #f));               \
     } while(0)
@@ -195,7 +204,7 @@ static inline const char * helix_xml_assert_name_of(const lv_obj_t * obj)
         lv_obj_t * hx_obj_ = (lv_obj_t *)(obj);                                          \
         TEST_ASSERT_NOT_NULL_MESSAGE(hx_obj_, "ASSERT_NO_FLAG on a NULL object");        \
         TEST_ASSERT_FALSE_MESSAGE(                                                       \
-            lv_obj_has_flag(hx_obj_, (f)),                                               \
+            helix_xml_assert_has_flag(hx_obj_, (f)),                                     \
             helix_xml_assert_msgf("\"%s\" unexpectedly has flag %s",                      \
                                   helix_xml_assert_name_of(hx_obj_), #f));               \
     } while(0)

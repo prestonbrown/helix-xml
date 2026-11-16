@@ -450,6 +450,33 @@ static void test_text_decor_to_enum_warns_and_returns_none_for_unknown(void)
 }
 
 /*===========================================================================
+ * lv_xml_text_leading_trim_to_enum
+ *==========================================================================*/
+
+static const enum_case_t TEXT_LEADING_TRIM_CASES[] = {
+    {"none", LV_TEXT_LEADING_TRIM_NONE},
+    {"capital_baseline", LV_TEXT_LEADING_TRIM_CAPITAL_BASELINE},
+    {"lower_baseline", LV_TEXT_LEADING_TRIM_LOWER_BASELINE},
+    {"capital", LV_TEXT_LEADING_TRIM_CAPITAL},
+    {"lower", LV_TEXT_LEADING_TRIM_LOWER},
+};
+
+static void test_text_leading_trim_to_enum_accepts_every_trim(void)
+{
+    RUN_ENUM_TABLE(lv_xml_text_leading_trim_to_enum, TEXT_LEADING_TRIM_CASES);
+}
+
+static void test_text_leading_trim_to_enum_warns_and_returns_none_for_unknown(void)
+{
+    log_capture_start();
+    TEST_ASSERT_EQUAL_INT32(LV_TEXT_LEADING_TRIM_NONE,
+                            (int32_t)lv_xml_text_leading_trim_to_enum("cap_height"));
+    log_capture_stop();
+
+    TEST_ASSERT_TRUE(log_contains("cap_height is an unknown value for text_leading_trim"));
+}
+
+/*===========================================================================
  * lv_xml_scroll_snap_to_enum
  *==========================================================================*/
 
@@ -892,6 +919,7 @@ static const enum_case_t STYLE_PROP_CASES[] = {
     {"text_letter_space", LV_STYLE_TEXT_LETTER_SPACE},
     {"text_line_space", LV_STYLE_TEXT_LINE_SPACE},
     {"text_decor", LV_STYLE_TEXT_DECOR},
+    {"text_leading_trim", LV_STYLE_TEXT_LEADING_TRIM},
     /* image */
     {"image_opa", LV_STYLE_IMAGE_OPA},
     {"image_recolor", LV_STYLE_IMAGE_RECOLOR},
@@ -952,8 +980,8 @@ static const enum_case_t STYLE_PROP_CASES[] = {
 
 static void test_style_prop_to_enum_accepts_every_property_name(void)
 {
-    TEST_ASSERT_EQUAL_size_t_MESSAGE(107, sizeof(STYLE_PROP_CASES) / sizeof(STYLE_PROP_CASES[0]),
-                                     "the style-prop table must stay exhaustive - 107 accepted strings");
+    TEST_ASSERT_EQUAL_size_t_MESSAGE(108, sizeof(STYLE_PROP_CASES) / sizeof(STYLE_PROP_CASES[0]),
+                                     "the style-prop table must stay exhaustive - 108 accepted strings");
     RUN_ENUM_TABLE(lv_xml_style_prop_to_enum, STYLE_PROP_CASES);
 }
 
@@ -1280,6 +1308,8 @@ int main(void)
 
     RUN_TEST(test_text_decor_to_enum_accepts_every_decoration);
     RUN_TEST(test_text_decor_to_enum_warns_and_returns_none_for_unknown);
+    RUN_TEST(test_text_leading_trim_to_enum_accepts_every_trim);
+    RUN_TEST(test_text_leading_trim_to_enum_warns_and_returns_none_for_unknown);
 
     RUN_TEST(test_scroll_snap_to_enum_accepts_every_snap_mode);
     RUN_TEST(test_scroll_snap_to_enum_warns_and_returns_none_for_unknown);

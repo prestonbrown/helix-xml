@@ -216,6 +216,18 @@ lv_text_decor_t lv_xml_text_decor_to_enum(const char * txt)
     return 0; /*Return 0 in lack of a better option. */
 }
 
+lv_text_leading_trim_t lv_xml_text_leading_trim_to_enum(const char * txt)
+{
+    if(lv_streq("none", txt)) return LV_TEXT_LEADING_TRIM_NONE;
+    if(lv_streq("capital_baseline", txt)) return LV_TEXT_LEADING_TRIM_CAPITAL_BASELINE;
+    if(lv_streq("lower_baseline", txt)) return LV_TEXT_LEADING_TRIM_LOWER_BASELINE;
+    if(lv_streq("capital", txt)) return LV_TEXT_LEADING_TRIM_CAPITAL;
+    if(lv_streq("lower", txt)) return LV_TEXT_LEADING_TRIM_LOWER;
+
+    LV_LOG_WARN("%s is an unknown value for text_leading_trim", txt);
+    return LV_TEXT_LEADING_TRIM_NONE;
+}
+
 lv_scroll_snap_t lv_xml_scroll_snap_to_enum(const char * txt)
 {
     if(lv_streq("none", txt)) return LV_SCROLL_SNAP_NONE;
@@ -480,6 +492,7 @@ lv_style_prop_t lv_xml_style_prop_to_enum(const char * txt)
     else if(lv_streq(txt, "text_letter_space")) return LV_STYLE_TEXT_LETTER_SPACE;
     else if(lv_streq(txt, "text_line_space")) return LV_STYLE_TEXT_LINE_SPACE;
     else if(lv_streq(txt, "text_decor")) return LV_STYLE_TEXT_DECOR;
+    else if(lv_streq(txt, "text_leading_trim")) return LV_STYLE_TEXT_LEADING_TRIM;
 
     else if(lv_streq(txt, "image_opa")) return LV_STYLE_IMAGE_OPA;
     else if(lv_streq(txt, "image_recolor")) return LV_STYLE_IMAGE_RECOLOR;

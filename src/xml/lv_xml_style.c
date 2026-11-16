@@ -282,6 +282,7 @@ lv_result_t lv_xml_register_style(lv_xml_component_scope_t * scope, const char *
         else SET_STYLE_IF(text_letter_space, lv_xml_atoi(value));
         else SET_STYLE_IF(text_line_space, lv_xml_atoi(value));
         else SET_STYLE_IF(text_decor, lv_xml_text_decor_to_enum(value));
+        else SET_STYLE_IF(text_leading_trim, lv_xml_text_leading_trim_to_enum(value));
 
         else SET_STYLE_IF(image_opa, lv_xml_to_opa(value));
         else SET_STYLE_IF(image_recolor, lv_xml_to_color(value));

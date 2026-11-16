@@ -135,6 +135,11 @@ typedef struct {
         false = borrowed. C++ owns the storage and registered it via
                 lv_xml_register_subject(); the scope only holds the pointer. */
     bool owned;
+    /** An owned string subject's two buffers, recorded at registration. The scope
+        frees them itself: after lv_deinit() the subject that pointed at them is
+        gone, so they cannot be read back from it. NULL otherwise. */
+    char * str_buf;
+    char * str_prev_buf;
 } lv_xml_subject_t;
 
 /**

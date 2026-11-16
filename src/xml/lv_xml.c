@@ -692,6 +692,18 @@ static lv_xml_subject_t * scope_find_subject(lv_xml_component_scope_t * scope, c
     return NULL;
 }
 
+/** Note an owned string subject's buffers on its record, while the subject is alive to
+ *  read them from (see lv_xml_subject_t). */
+static void record_string_buffers(lv_xml_subject_t * s)
+{
+    s->str_buf = NULL;
+    s->str_prev_buf = NULL;
+    if(s->owned && s->subject != NULL && s->subject->type == LV_SUBJECT_TYPE_STRING) {
+        s->str_buf = (char *)s->subject->value.pointer;
+        s->str_prev_buf = (char *)s->subject->prev_value.pointer;
+    }
+}
+
 static lv_result_t register_subject_impl(lv_xml_component_scope_t * scope, const char * name,
                                          lv_subject_t * subject, bool owned)
 {
@@ -731,6 +743,7 @@ static lv_result_t register_subject_impl(lv_xml_component_scope_t * scope, const
         }
         s->subject = subject;
         s->owned = owned;
+        record_string_buffers(s);
         return LV_RESULT_OK;
     }
 
@@ -743,6 +756,7 @@ static lv_result_t register_subject_impl(lv_xml_component_scope_t * scope, const
     s->name = lv_strdup(name);
     s->subject = subject;
     s->owned = owned;
+    record_string_buffers(s);
     if(scope->indexed) lv_xml_name_index_insert(&scope->subject_index, s);
 
     return LV_RESULT_OK;
@@ -2055,6 +2069,15 @@ static void xml_frag_instance_delete_cb(lv_event_t * e)
 void lv_xml_frag_record_free(xml_frag_record_t * r)
 {
     if(r == NULL) return;
+    /*After lv_deinit() the instance widgets, the subjects and every observer on them
+     *are gone, so only the record's own heap is left to free.*/
+    if(!lv_is_initialized()) {
+        r->observer = NULL;
+        r->view_root = NULL;
+        r->bind = NULL;
+        xml_frag_record_free_heap(r);
+        return;
+    }
     /*<repeat> reactive count observer: the instance and its count subject are still
      *alive on this unregister-sweep path (called BEFORE subjects_ll teardown), so
      *remove the observer here — free_heap no longer does. lv_observer_delete also

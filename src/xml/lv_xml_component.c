@@ -625,17 +625,14 @@ void lv_xml_subject_record_release_storage(lv_xml_subject_t * s)
 {
     if(s == NULL || !s->owned || s->subject == NULL) return;
 
-    /* The buffer pointers are read first: the subject is gone after the delete,
-     * and observers still see the buffers until it returns. */
-    char * buf = NULL;
-    char * prev_buf = NULL;
-    if(s->subject->type == LV_SUBJECT_TYPE_STRING) {
-        buf = (char *)s->subject->value.pointer;
-        prev_buf = (char *)s->subject->prev_value.pointer;
-    }
-    lv_subject_delete(s->subject);
-    lv_free(prev_buf);
-    lv_free(buf);
+    /* lv_deinit() deletes every subject node it created, this one included, and its
+     * observers with it: past that point only the buffers are still ours. Observers
+     * see the buffers until the delete returns, so they are freed after it. */
+    if(lv_is_initialized()) lv_subject_delete(s->subject);
+    lv_free(s->str_prev_buf);
+    lv_free(s->str_buf);
+    s->str_buf = NULL;
+    s->str_prev_buf = NULL;
 }
 
 lv_result_t lv_xml_component_unregister(const char * name)
@@ -1332,7 +1329,9 @@ static void subject_expr_record_release(lv_xml_subject_expr_t * record)
 {
     if(record == NULL) return;
 
-    for(uint32_t i = 0; i < record->observer_count; i++) {
+    /* After lv_deinit() the observers are gone already: it deletes every subject's
+     * observers along with the subject. */
+    for(uint32_t i = 0; lv_is_initialized() && i < record->observer_count; i++) {
         if(record->observers[i]) lv_observer_delete(record->observers[i]);
     }
     lv_free(record->observers);

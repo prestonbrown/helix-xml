@@ -1994,7 +1994,7 @@ static void xml_frag_record_free_heap(xml_frag_record_t * r)
     /*<repeat> reactive count observer: it is obj-bound to r->view_root, so on the
      *instance-delete path (this function, called from xml_frag_instance_delete_cb)
      *LVGL's unsubscribe_on_delete_cb on that same view root removes it — and if the
-     *count subject was deinited first, lv_subject_deinit already freed the node and
+     *count subject was deleted first, lv_subject_delete already freed the node and
      *removed that unsubscribe cb. Either way the node must NOT be removed again here;
      *doing so double-frees / reads a freed observer (UAF at shutdown). Just drop the
      *pointer. The unregister-sweep path (lv_xml_frag_record_free) removes it BEFORE
@@ -2148,26 +2148,43 @@ static const char * xml_compose_lookup(lv_xml_parser_state_t * state, const char
 #define XML_COMPOSE_EXPR_MAX_OPERANDS 32
 
 /** Resolver context for an inline `${expr}`. Lives on the stack for exactly one
- *  compose call (compile+eval+free), so index_subject / param_subjects are
- *  stack-lifetime and deinit'd right after eval. No observers are ever attached. */
+ *  compose call (compile+eval+free). The resolver lv_subject_create()s the
+ *  operand subjects on demand and xml_compose_expr_ctx_release() deletes them
+ *  right after eval. No observers are ever attached. */
 typedef struct {
     lv_xml_parser_state_t * state;
     xml_frag_capture_t * rc;                      /* NULL unless in a replaying <repeat> */
-    lv_subject_t index_subject;                   /* seeded to rc->current_index for `i` */
-    lv_subject_t param_subjects[XML_COMPOSE_EXPR_MAX_OPERANDS]; /* numeric-param operands (Task 2) */
+    lv_subject_t * index_subject;                 /* created on first `i`, seeded to rc->current_index */
+    lv_subject_t * param_subjects[XML_COMPOSE_EXPR_MAX_OPERANDS]; /* numeric-param operands */
     uint32_t param_count;
 } xml_compose_expr_ctx_t;
 
+/** Deletes every operand subject the resolver created for one `${expr}`. */
+static void xml_compose_expr_ctx_release(xml_compose_expr_ctx_t * c)
+{
+    for(uint32_t k = 0; k < c->param_count; k++) lv_subject_delete(c->param_subjects[k]);
+    c->param_count = 0;
+    lv_subject_delete(c->index_subject);
+    c->index_subject = NULL;
+}
+
 /** Maps an identifier in a `${expr}` to a subject: `i` -> the loop index; a numeric
- *  component param -> a transient int subject (Task 2); otherwise a real scope subject.
+ *  component param -> a transient int subject; otherwise a real scope subject.
  *  Returns NULL for an unresolvable name, which makes lv_xml_expr_compile fail. */
 static lv_subject_t * xml_compose_expr_resolver(void * vctx, const char * name)
 {
     xml_compose_expr_ctx_t * c = (xml_compose_expr_ctx_t *)vctx;
 
     /* 1. loop index */
-    if(lv_streq(name, "i"))
-        return (c->rc && c->rc->replaying) ? &c->index_subject : NULL;
+    if(lv_streq(name, "i")) {
+        if(c->rc == NULL || !c->rc->replaying) return NULL;
+        if(c->index_subject == NULL) {
+            c->index_subject = lv_subject_create(LV_SUBJECT_TYPE_INT);
+            if(c->index_subject == NULL) return NULL;
+            lv_subject_set_int(c->index_subject, (int32_t)c->rc->current_index);
+        }
+        return c->index_subject;
+    }
 
     /* 2. numeric component-param / parent-attr -> transient int operand.
      *    Mirrors xml_compose_lookup's param resolution (parent attrs, then default). */
@@ -2176,8 +2193,10 @@ static lv_subject_t * xml_compose_expr_resolver(void * vctx, const char * name)
         if(pv == NULL || pv[0] == '$') pv = get_param_default(&c->state->scope, name);
         if(pv && xml_str_is_integer(pv)) {
             if(c->param_count >= XML_COMPOSE_EXPR_MAX_OPERANDS) return NULL;
-            lv_subject_t * s = &c->param_subjects[c->param_count++];
-            lv_subject_init_int(s, lv_xml_atoi(pv));
+            lv_subject_t * s = lv_subject_create(LV_SUBJECT_TYPE_INT);
+            if(s == NULL) return NULL;
+            c->param_subjects[c->param_count++] = s;
+            lv_subject_set_int(s, lv_xml_atoi(pv));
             return s;
         }
     }
@@ -2245,9 +2264,8 @@ static char * xml_compose_indexed(lv_xml_parser_state_t * state, const char * ra
                     xml_compose_expr_ctx_t ectx;
                     ectx.state = state;
                     ectx.rc = state ? (xml_frag_capture_t *)state->context : NULL;
+                    ectx.index_subject = NULL;
                     ectx.param_count = 0;
-                    lv_subject_init_int(&ectx.index_subject,
-                                        (ectx.rc && ectx.rc->replaying) ? (int32_t)ectx.rc->current_index : 0);
 
                     lv_xml_expr_t * ex = lv_xml_expr_compile(nbuf, xml_compose_expr_resolver, &ectx);
                     if(ex == NULL) {
@@ -2259,9 +2277,7 @@ static char * xml_compose_indexed(lv_xml_parser_state_t * state, const char * ra
                         lv_xml_expr_free(ex); /*free before APPEND, which may return early on OOM*/
                         XML_COMPOSE_APPEND(exprbuf, lv_strlen(exprbuf));
                     }
-                    for(uint32_t k = 0; k < ectx.param_count; k++)
-                        lv_subject_deinit(&ectx.param_subjects[k]);
-                    lv_subject_deinit(&ectx.index_subject);
+                    xml_compose_expr_ctx_release(&ectx);
                 }
             }
             p = close + 1;
@@ -2638,7 +2654,7 @@ static void view_end_element_handler(void * user_data, const char * name)
                          *plain observer). This makes the observer node co-owned by
                          *LVGL's standard machinery: whichever dies first — the view
                          *root (unsubscribe_on_delete_cb) or the count subject
-                         *(lv_subject_deinit sweeping subs_ll) — removes the node and
+                         *(lv_subject_delete sweeping subs_ll) — removes the node and
                          *disarms the other side. A plain lv_subject_add_observer is
                          *removed only by the frag record's own view-root delete cb, so
                          *if the subject is deinited first (e.g. a panel frees its

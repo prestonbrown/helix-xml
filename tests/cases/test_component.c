@@ -37,6 +37,7 @@
  * assertion. */
 #include "helpers/helix_log_capture.h"
 #include "helpers/helix_test_env.h"
+#include "helpers/helix_test_subject.h"
 #include "helpers/helix_test_pump.h"
 #include "helpers/xml_assert.h"
 
@@ -193,26 +194,26 @@ static const char * OWNS_EVERYTHING_XML =
 /*---------------------------------------------------------------------------
  * Shared subjects
  *
- * File-static, never heap: they must survive lv_deinit(), and every test that
- * uses one re-inits it first (lv_subject_init_* resets subs_ll, so a stale
- * observer list from a previous LVGL cycle is dropped rather than walked).
+ * File-static pointers to created subjects. lv_deinit() at the end of each test
+ * deletes the subjects, so every test that uses one creates it first and the
+ * pointer is never followed across a test boundary.
  *--------------------------------------------------------------------------*/
 
-static lv_subject_t s_text_subject;
+static lv_subject_t * s_text_subject;
 static char s_text_buf[64];
 static char s_text_prev[64];
 
-static lv_subject_t s_alt_subject;
+static lv_subject_t * s_alt_subject;
 static char s_alt_buf[64];
 static char s_alt_prev[64];
 
-static lv_subject_t s_borrowed_subject;
+static lv_subject_t * s_borrowed_subject;
 
 static void init_text_subject(const char * value)
 {
-    lv_subject_init_string(&s_text_subject, s_text_buf, s_text_prev, sizeof(s_text_buf), value);
+    s_text_subject = helix_test_subject_string(s_text_buf, s_text_prev, sizeof(s_text_buf), value);
     TEST_ASSERT_EQUAL_INT_MESSAGE(LV_RESULT_OK,
-                                  (int)lv_xml_register_subject(NULL, "comp_text_subject", &s_text_subject),
+                                  (int)lv_xml_register_subject(NULL, "comp_text_subject", s_text_subject),
                                   "couldn't register the shared string subject globally");
 }
 
@@ -243,8 +244,8 @@ static void test_a_prop_passed_at_create_time_overrides_its_default(void)
 {
     init_text_subject("from subject");
 
-    lv_subject_init_string(&s_alt_subject, s_alt_buf, s_alt_prev, sizeof(s_alt_buf), "alt subject");
-    lv_xml_register_subject(NULL, "comp_alt_subject", &s_alt_subject);
+    s_alt_subject = helix_test_subject_string(s_alt_buf, s_alt_prev, sizeof(s_alt_buf), "alt subject");
+    lv_xml_register_subject(NULL, "comp_alt_subject", s_alt_subject);
 
     ASSERT_XML_REGISTERS("prop_demo", PROP_DEMO_XML);
 
@@ -284,7 +285,7 @@ static void test_a_subject_typed_prop_produces_a_live_binding(void)
     lv_obj_t * bound = ASSERT_NAMED(inst, "prop_bound");
     ASSERT_LABEL_TEXT(bound, "first");
 
-    lv_subject_set_string(&s_text_subject, "second");
+    lv_subject_set_string(s_text_subject, "second");
     helix_test_pump(30);
     ASSERT_LABEL_TEXT(bound, "second");
 }
@@ -801,9 +802,9 @@ static void count_observer_cb(lv_observer_t * observer, lv_subject_t * subject)
  * that holds the name must not deinit or free it.
  *
  * "Still alive" is proved by an observer registered from outside the engine.
- * lv_subject_deinit() rips every observer off the subject, so if unregister
+ * lv_subject_delete() rips every observer off the subject, so if unregister
  * treated a borrowed subject as owned, the callback would stop firing - and
- * lv_free() on this file-static address would abort outright.
+ * the subject would be gone while LVGL's subject list still holds it.
  */
 static void test_unregistering_a_component_does_not_free_a_borrowed_subject(void)
 {
@@ -811,24 +812,24 @@ static void test_unregistering_a_component_does_not_free_a_borrowed_subject(void
     lv_xml_component_scope_t * scope = lv_xml_component_get_scope("inner_comp");
     TEST_ASSERT_NOT_NULL(scope);
 
-    lv_subject_init_int(&s_borrowed_subject, 10);
+    s_borrowed_subject = helix_test_subject_int(10);
     TEST_ASSERT_EQUAL_INT(LV_RESULT_OK,
-                          (int)lv_xml_register_subject(scope, "borrowed_one", &s_borrowed_subject));
+                          (int)lv_xml_register_subject(scope, "borrowed_one", s_borrowed_subject));
 
     s_observer_hits = 0;
-    lv_subject_add_observer(&s_borrowed_subject, count_observer_cb, NULL);
+    lv_subject_add_observer(s_borrowed_subject, count_observer_cb, NULL);
     TEST_ASSERT_EQUAL_UINT32_MESSAGE(1, s_observer_hits,
                                      "lv_subject_add_observer() should fire once on registration");
 
     TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_component_unregister("inner_comp"));
 
     /* The storage is intact and still observed. */
-    lv_subject_set_int(&s_borrowed_subject, 42);
+    lv_subject_set_int(s_borrowed_subject, 42);
     TEST_ASSERT_EQUAL_UINT32_MESSAGE(2, s_observer_hits,
                                      "unregistering the component detached observers from a BORROWED subject");
-    TEST_ASSERT_EQUAL_INT32(42, lv_subject_get_int(&s_borrowed_subject));
+    TEST_ASSERT_EQUAL_INT32(42, lv_subject_get_int(s_borrowed_subject));
 
-    lv_subject_deinit(&s_borrowed_subject);
+    lv_subject_delete(s_borrowed_subject);
 }
 
 /**

@@ -39,6 +39,7 @@
 
 #include "helpers/helix_log_capture.h"
 #include "helpers/helix_test_env.h"
+#include "helpers/helix_test_subject.h"
 #include "helpers/helix_test_pump.h"
 #include "helpers/xml_assert.h"
 
@@ -264,11 +265,9 @@ static void test_a_forward_reference_to_a_later_subject_does_not_register(void)
  * Teardown with a GLOBAL input
  *==========================================================================*/
 
-/* Static storage: this subject must outlive the component that observes it,
- * which is the whole point of the test. Re-initialised inside the test body,
- * because the previous test's lv_deinit() reclaimed the pool its observer list
- * lived in. */
-static lv_subject_t g_expr_global_input;
+/* A created subject that must outlive the component that observes it, which is
+ * the whole point of the test. Created and deleted inside the test body. */
+static lv_subject_t * g_expr_global_input;
 
 /**
  * A <subject_expr> whose input is a GLOBAL subject. Only the subject_expr_ll
@@ -281,9 +280,9 @@ static lv_subject_t g_expr_global_input;
  */
 static void test_an_observer_on_a_global_input_is_removed_at_unregister(void)
 {
-    lv_subject_init_int(&g_expr_global_input, 0);
+    g_expr_global_input = helix_test_subject_int(0);
     TEST_ASSERT_EQUAL_INT(LV_RESULT_OK,
-                          (int)lv_xml_register_subject(NULL, "g_expr_in", &g_expr_global_input));
+                          (int)lv_xml_register_subject(NULL, "g_expr_in", g_expr_global_input));
 
     ASSERT_XML_REGISTERS("se_global",
                          "<component>"
@@ -296,12 +295,12 @@ static void test_an_observer_on_a_global_input_is_removed_at_unregister(void)
     lv_subject_t * derived = must_subject("se_global", "g_derived");
 
     /* The observer is live and the expression really resolved the global. */
-    lv_subject_set_int(&g_expr_global_input, 10);
+    lv_subject_set_int(g_expr_global_input, 10);
     helix_test_pump(30);
     TEST_ASSERT_EQUAL_INT32_MESSAGE(1, lv_subject_get_int(derived),
                                     "a global subject must be resolvable from <subject_expr>");
 
-    lv_subject_set_int(&g_expr_global_input, 2);
+    lv_subject_set_int(g_expr_global_input, 2);
     helix_test_pump(30);
     TEST_ASSERT_EQUAL_INT32(0, lv_subject_get_int(derived));
 
@@ -310,13 +309,12 @@ static void test_an_observer_on_a_global_input_is_removed_at_unregister(void)
     /* The global outlived the component. Writing to it must not reach the
      * freed ctx. `derived` is gone, so there is nothing left to read back -
      * surviving this write, and the pump that follows it, is the result. */
-    lv_subject_set_int(&g_expr_global_input, 99);
+    lv_subject_set_int(g_expr_global_input, 99);
     helix_test_pump(30);
-    TEST_ASSERT_EQUAL_INT32_MESSAGE(99, lv_subject_get_int(&g_expr_global_input),
+    TEST_ASSERT_EQUAL_INT32_MESSAGE(99, lv_subject_get_int(g_expr_global_input),
                                     "the global subject itself must be untouched by the teardown");
 
-    /* Leave nothing observing static storage across the lv_deinit() in tearDown. */
-    lv_subject_deinit(&g_expr_global_input);
+    lv_subject_delete(g_expr_global_input);
 }
 
 /*---------------------------------------------------------------------------

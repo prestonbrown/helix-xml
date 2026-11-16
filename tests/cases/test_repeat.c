@@ -69,6 +69,7 @@
 
 #include "helpers/helix_log_capture.h"
 #include "helpers/helix_test_env.h"
+#include "helpers/helix_test_subject.h"
 #include "helpers/helix_test_pump.h"
 #include "helpers/xml_assert.h"
 
@@ -234,8 +235,9 @@ static const char * REPEAT_SUBJECT_WITH_TAIL_XML =
 /* The count subject lives in the GLOBAL scope here, so it outlives both the
  * instance and the component registration - which is what makes a leaked
  * observer reachable, and therefore fatal, long after everything it rebuilds is
- * gone. File-static so it survives lv_deinit(); every test re-inits it first. */
-static lv_subject_t s_global_count;
+ * gone. A file-static pointer to a created subject; lv_deinit() deletes the subject
+ * at the end of each test, so every test creates it first. */
+static lv_subject_t * s_global_count;
 
 static const char * REPEAT_GLOBAL_XML =
     "<component>"
@@ -246,15 +248,15 @@ static const char * REPEAT_GLOBAL_XML =
     "  </view>"
     "</component>";
 
-/** Re-init the global count subject and (re-)register it under its XML name. */
+/** Create the global count subject and register it under its XML name. */
 static void init_global_count(int32_t value)
 {
-    lv_subject_init_int(&s_global_count, value);
+    s_global_count = helix_test_subject_int(value);
     TEST_ASSERT_EQUAL_INT_MESSAGE(LV_RESULT_OK,
                                   (int)lv_xml_register_subject(NULL, "rep_global_count",
-                                                               &s_global_count),
+                                                               s_global_count),
                                   "couldn't register the global count subject");
-    TEST_ASSERT_EQUAL_UINT32_MESSAGE(0, subject_observer_count(&s_global_count),
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(0, subject_observer_count(s_global_count),
                                      "a freshly inited subject already has subscribers");
 }
 
@@ -539,20 +541,20 @@ static void test_a_count_change_after_instance_delete_does_not_reach_a_dangling_
     lv_obj_t * v = XML_CREATE(helix_test_env_screen(), "rep_after_delete", NULL);
     helix_test_pump(30);
     ASSERT_CHILD_COUNT(ASSERT_NAMED(v, "root"), 3);
-    TEST_ASSERT_EQUAL_UINT32_MESSAGE(1, subject_observer_count(&s_global_count),
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(1, subject_observer_count(s_global_count),
                                      "the subject-bound repeat did not subscribe to its count");
 
     lv_obj_delete(v);            /* instance gone; component still registered */
     helix_test_pump(30);
 
-    TEST_ASSERT_EQUAL_UINT32_MESSAGE(0, subject_observer_count(&s_global_count),
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(0, subject_observer_count(s_global_count),
                                      "the count observer outlived the instance whose widgets it "
                                      "rebuilds - the next value change is a use-after-free");
 
     /* The dangerous window: the shared subject changes while no instance is alive. */
-    lv_subject_set_int(&s_global_count, 7);
+    lv_subject_set_int(s_global_count, 7);
     helix_test_pump(30);
-    TEST_ASSERT_EQUAL_UINT32(0, subject_observer_count(&s_global_count));
+    TEST_ASSERT_EQUAL_UINT32(0, subject_observer_count(s_global_count));
 
     lv_xml_component_unregister("rep_after_delete");
 }
@@ -571,10 +573,10 @@ static void test_unregistering_a_count_subject_removes_its_global_observer(void)
     helix_test_pump(30);
     lv_obj_t * root = ASSERT_NAMED(v, "root");
     ASSERT_CHILD_COUNT(root, 3);
-    TEST_ASSERT_EQUAL_UINT32(1, subject_observer_count(&s_global_count));
+    TEST_ASSERT_EQUAL_UINT32(1, subject_observer_count(s_global_count));
 
     /* The observer is live: the global drives a real rebuild. */
-    lv_subject_set_int(&s_global_count, 6);
+    lv_subject_set_int(s_global_count, 6);
     helix_test_pump(50);
     ASSERT_CHILD_COUNT(root, 6);
 
@@ -584,15 +586,15 @@ static void test_unregistering_a_count_subject_removes_its_global_observer(void)
                                   (int)lv_xml_component_unregister("rep_unreg"),
                                   "unregistering a component with a subject-bound repeat failed");
 
-    TEST_ASSERT_EQUAL_UINT32_MESSAGE(0, subject_observer_count(&s_global_count),
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(0, subject_observer_count(s_global_count),
                                      "an observer is still attached to the global count subject "
                                      "after the component was unregistered - its record is freed, "
                                      "so the next change fires on freed memory");
 
     /* Mutating the global now must not reach the freed record. */
-    lv_subject_set_int(&s_global_count, 99);
+    lv_subject_set_int(s_global_count, 99);
     helix_test_pump(30);
-    TEST_ASSERT_EQUAL_UINT32(0, subject_observer_count(&s_global_count));
+    TEST_ASSERT_EQUAL_UINT32(0, subject_observer_count(s_global_count));
 }
 
 /**
@@ -618,7 +620,7 @@ static void test_unregistering_while_the_instance_is_alive_keeps_it_working(void
     helix_test_pump(30);
     lv_obj_t * root = ASSERT_NAMED(v, "root");
     ASSERT_CHILD_COUNT(root, 3);
-    TEST_ASSERT_EQUAL_UINT32(1, subject_observer_count(&s_global_count));
+    TEST_ASSERT_EQUAL_UINT32(1, subject_observer_count(s_global_count));
 
     TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_component_unregister("rep_unreg_live"));
     TEST_ASSERT_NULL_MESSAGE(lv_xml_component_get_scope("rep_unreg_live"),
@@ -626,20 +628,20 @@ static void test_unregistering_while_the_instance_is_alive_keeps_it_working(void
 
     /* Still reactive: the record, its observer and the scope behind them are all
      * intact because the instance that needs them is still on screen. */
-    lv_subject_set_int(&s_global_count, 9);
+    lv_subject_set_int(s_global_count, 9);
     helix_test_pump(30);
     ASSERT_CHILD_COUNT(root, 9);
 
     /* Deleting the orphan detaches the observer and releases the held scope. */
     lv_obj_delete(v);
     helix_test_pump(30);
-    TEST_ASSERT_EQUAL_UINT32_MESSAGE(0, subject_observer_count(&s_global_count),
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(0, subject_observer_count(s_global_count),
                                      "deleting the orphaned instance left the count observer "
                                      "attached; the next change fires on freed memory");
 
-    lv_subject_set_int(&s_global_count, 99);
+    lv_subject_set_int(s_global_count, 99);
     helix_test_pump(30);
-    TEST_ASSERT_EQUAL_UINT32(0, subject_observer_count(&s_global_count));
+    TEST_ASSERT_EQUAL_UINT32(0, subject_observer_count(s_global_count));
 }
 
 /**
@@ -659,23 +661,23 @@ static void test_reinstantiation_does_not_accumulate_stale_observers(void)
     lv_obj_t * v1 = XML_CREATE(helix_test_env_screen(), "rep_reinst", NULL);
     helix_test_pump(30);
     ASSERT_CHILD_COUNT(ASSERT_NAMED(v1, "root"), 2);
-    TEST_ASSERT_EQUAL_UINT32(1, subject_observer_count(&s_global_count));
+    TEST_ASSERT_EQUAL_UINT32(1, subject_observer_count(s_global_count));
 
     lv_obj_delete(v1);
     helix_test_pump(30);
-    TEST_ASSERT_EQUAL_UINT32(0, subject_observer_count(&s_global_count));
+    TEST_ASSERT_EQUAL_UINT32(0, subject_observer_count(s_global_count));
 
     lv_obj_t * v2 = XML_CREATE(helix_test_env_screen(), "rep_reinst", NULL);
     helix_test_pump(30);
     lv_obj_t * root2 = ASSERT_NAMED(v2, "root");
     ASSERT_CHILD_COUNT(root2, 2);
 
-    TEST_ASSERT_EQUAL_UINT32_MESSAGE(1, subject_observer_count(&s_global_count),
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(1, subject_observer_count(s_global_count),
                                      "observers accumulated across instantiations - the dead "
                                      "instance's record still rebuilds onto freed roots");
 
     /* The rebuild must reach only the live second instance. */
-    lv_subject_set_int(&s_global_count, 5);
+    lv_subject_set_int(s_global_count, 5);
     helix_test_pump(30);
     ASSERT_CHILD_COUNT(root2, 5);
 

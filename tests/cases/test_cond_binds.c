@@ -42,6 +42,7 @@
  */
 
 #include "helpers/helix_test_env.h"
+#include "helpers/helix_test_subject.h"
 #include "helpers/helix_test_pump.h"
 #include "helpers/xml_assert.h"
 
@@ -470,17 +471,16 @@ static void test_two_flag_binds_for_one_flag_or_together(void)
  * means "no binding"; both appliers must skip it.
  */
 
-/* File-static on purpose: it must survive the lv_deinit() at the end of the
- * previous test, and lv_subject_init_int() drops any stale observer list
- * before this test's cycle uses it. */
-static lv_subject_t s_empty_name_subject;
+/* File-static so the registered subject outlives the function that created it.
+ * lv_deinit() at the end of each test deletes it; each test creates its own. */
+static lv_subject_t * s_empty_name_subject;
 
 static void empty_name_subject_register(void)
 {
-    lv_subject_init_int(&s_empty_name_subject, 0);
+    s_empty_name_subject = helix_test_subject_int(0);
     TEST_ASSERT_EQUAL_INT_MESSAGE(
         LV_RESULT_OK,
-        (int)lv_xml_register_subject(NULL, "", &s_empty_name_subject),
+        (int)lv_xml_register_subject(NULL, "", s_empty_name_subject),
         "could not register the int-0 subject under the empty name");
 }
 

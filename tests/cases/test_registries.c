@@ -44,6 +44,7 @@
  * one MUST NOT, for the exact same absent name. */
 #include "helpers/helix_log_capture.h"
 #include "helpers/helix_test_env.h"
+#include "helpers/helix_test_subject.h"
 #include "helpers/helix_test_pump.h"
 #include "helpers/xml_assert.h"
 
@@ -82,17 +83,17 @@ static lv_xml_component_scope_t * register_bare_scope(const char * name)
 
 /* Subject storage. File-static rather than stack: a subject can outlive the
  * function that registered it (an observer attached to it is torn down in
- * tearDown, after the test body has returned), and it must survive lv_deinit().
- * Every test re-inits the ones it uses - lv_subject_init_* resets subs_ll, so no
- * observer list from a previous LVGL cycle is ever walked. */
-static lv_subject_t s_int_subject;
-static lv_subject_t s_other_int_subject;
-static lv_subject_t s_string_subject;
+ * tearDown, after the test body has returned). lv_deinit() at the end of each
+ * test deletes every created subject, so every test creates the ones it uses and
+ * no pointer is followed across a test boundary. */
+static lv_subject_t * s_int_subject;
+static lv_subject_t * s_other_int_subject;
+static lv_subject_t * s_string_subject;
 static char s_string_buf[64];
 static char s_string_prev[64];
-static lv_subject_t s_pointer_subject;
-static lv_subject_t s_color_subject;
-static lv_subject_t s_float_subject;
+static lv_subject_t * s_pointer_subject;
+static lv_subject_t * s_color_subject;
+static lv_subject_t * s_float_subject;
 
 static int s_pointee = 5;
 
@@ -123,18 +124,18 @@ static void cb_gamma(lv_event_t * e)
 /** Registering makes the name resolve to that exact subject, and no other. */
 static void test_registering_a_subject_makes_it_findable_by_name(void)
 {
-    lv_subject_init_int(&s_int_subject, 11);
+    s_int_subject = helix_test_subject_int(11);
 
     TEST_ASSERT_EQUAL_INT_MESSAGE(LV_RESULT_OK,
-                                  (int)lv_xml_register_subject(NULL, "reg_int", &s_int_subject),
+                                  (int)lv_xml_register_subject(NULL, "reg_int", s_int_subject),
                                   "lv_xml_register_subject() into the global scope failed");
 
     lv_subject_t * got = lv_xml_get_subject(NULL, "reg_int");
-    TEST_ASSERT_EQUAL_PTR_MESSAGE(&s_int_subject, got,
+    TEST_ASSERT_EQUAL_PTR_MESSAGE(s_int_subject, got,
                                   "the registry handed back a different subject than was registered");
 
     /* It is the live subject, not a snapshot. */
-    lv_subject_set_int(&s_int_subject, 99);
+    lv_subject_set_int(s_int_subject, 99);
     TEST_ASSERT_EQUAL_INT32(99, lv_subject_get_int(got));
 }
 
@@ -146,18 +147,18 @@ static void test_registering_a_subject_makes_it_findable_by_name(void)
  */
 static void test_every_subject_type_the_engine_supports_round_trips(void)
 {
-    lv_subject_init_int(&s_int_subject, 7);
-    lv_subject_init_string(&s_string_subject, s_string_buf, s_string_prev,
+    s_int_subject = helix_test_subject_int(7);
+    s_string_subject = helix_test_subject_string(s_string_buf, s_string_prev,
                            sizeof(s_string_buf), "hello");
-    lv_subject_init_pointer(&s_pointer_subject, &s_pointee);
-    lv_subject_init_color(&s_color_subject, lv_color_hex(0x123456));
-    lv_subject_init_float(&s_float_subject, 1.5f);
+    s_pointer_subject = helix_test_subject_pointer(&s_pointee);
+    s_color_subject = helix_test_subject_color(lv_color_hex(0x123456));
+    s_float_subject = helix_test_subject_float(1.5f);
 
-    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_register_subject(NULL, "t_int", &s_int_subject));
-    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_register_subject(NULL, "t_string", &s_string_subject));
-    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_register_subject(NULL, "t_pointer", &s_pointer_subject));
-    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_register_subject(NULL, "t_color", &s_color_subject));
-    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_register_subject(NULL, "t_float", &s_float_subject));
+    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_register_subject(NULL, "t_int", s_int_subject));
+    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_register_subject(NULL, "t_string", s_string_subject));
+    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_register_subject(NULL, "t_pointer", s_pointer_subject));
+    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_register_subject(NULL, "t_color", s_color_subject));
+    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_register_subject(NULL, "t_float", s_float_subject));
 
     TEST_ASSERT_EQUAL_INT32(7, lv_subject_get_int(lv_xml_get_subject(NULL, "t_int")));
     TEST_ASSERT_EQUAL_STRING("hello", lv_subject_get_string(lv_xml_get_subject(NULL, "t_string")));
@@ -168,8 +169,8 @@ static void test_every_subject_type_the_engine_supports_round_trips(void)
     TEST_ASSERT_EQUAL_FLOAT(1.5f, lv_subject_get_float(lv_xml_get_subject(NULL, "t_float")));
 
     /* Each name resolves to its OWN subject - no cross-talk between types. */
-    TEST_ASSERT_EQUAL_PTR(&s_string_subject, lv_xml_get_subject(NULL, "t_string"));
-    TEST_ASSERT_EQUAL_PTR(&s_float_subject, lv_xml_get_subject(NULL, "t_float"));
+    TEST_ASSERT_EQUAL_PTR(s_string_subject, lv_xml_get_subject(NULL, "t_string"));
+    TEST_ASSERT_EQUAL_PTR(s_float_subject, lv_xml_get_subject(NULL, "t_float"));
 }
 
 /**
@@ -179,13 +180,13 @@ static void test_every_subject_type_the_engine_supports_round_trips(void)
  */
 static void test_registering_a_duplicate_subject_name_replaces_the_pointer(void)
 {
-    lv_subject_init_int(&s_int_subject, 1);
-    lv_subject_init_int(&s_other_int_subject, 2);
+    s_int_subject = helix_test_subject_int(1);
+    s_other_int_subject = helix_test_subject_int(2);
 
-    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_register_subject(NULL, "dup", &s_int_subject));
-    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_register_subject(NULL, "dup", &s_other_int_subject));
+    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_register_subject(NULL, "dup", s_int_subject));
+    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_register_subject(NULL, "dup", s_other_int_subject));
 
-    TEST_ASSERT_EQUAL_PTR_MESSAGE(&s_other_int_subject, lv_xml_get_subject(NULL, "dup"),
+    TEST_ASSERT_EQUAL_PTR_MESSAGE(s_other_int_subject, lv_xml_get_subject(NULL, "dup"),
                                   "the second registration of a name must win");
 
     TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_unregister_subject(NULL, "dup"));
@@ -210,8 +211,8 @@ static void test_getting_an_absent_subject_returns_null_and_warns(void)
 
 static void test_unregistering_a_subject_removes_it_from_the_global_scope(void)
 {
-    lv_subject_init_int(&s_int_subject, 4);
-    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_register_subject(NULL, "goner", &s_int_subject));
+    s_int_subject = helix_test_subject_int(4);
+    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_register_subject(NULL, "goner", s_int_subject));
     TEST_ASSERT_NOT_NULL(lv_xml_get_subject(NULL, "goner"));
 
     TEST_ASSERT_EQUAL_INT_MESSAGE(LV_RESULT_OK, (int)lv_xml_unregister_subject(NULL, "goner"),
@@ -223,8 +224,8 @@ static void test_unregistering_a_subject_removes_it_from_the_global_scope(void)
     TEST_ASSERT_NULL_MESSAGE(got, "the subject name survived unregistering");
 
     /* The slot is genuinely free: the same name can be registered again. */
-    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_register_subject(NULL, "goner", &s_int_subject));
-    TEST_ASSERT_EQUAL_PTR(&s_int_subject, lv_xml_get_subject(NULL, "goner"));
+    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_register_subject(NULL, "goner", s_int_subject));
+    TEST_ASSERT_EQUAL_PTR(s_int_subject, lv_xml_get_subject(NULL, "goner"));
 }
 
 static void test_unregistering_an_absent_subject_reports_invalid(void)
@@ -245,27 +246,27 @@ static void count_observer_cb(lv_observer_t * observer, lv_subject_t * subject)
 
 /**
  * A subject registered through the public entry point is BORROWED: unregistering
- * the name drops the record but must not deinit the subject. lv_subject_deinit()
+ * the name drops the record but must not delete the subject. lv_subject_delete()
  * detaches every observer, so an observer that keeps firing afterwards is the
- * proof - and lv_free() on this file-static address would abort outright.
+ * proof.
  */
 static void test_unregistering_a_borrowed_subject_does_not_deinit_it(void)
 {
-    lv_subject_init_int(&s_int_subject, 0);
-    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_register_subject(NULL, "borrowed", &s_int_subject));
+    s_int_subject = helix_test_subject_int(0);
+    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_register_subject(NULL, "borrowed", s_int_subject));
 
     s_observer_hits = 0;
-    lv_subject_add_observer(&s_int_subject, count_observer_cb, NULL);
+    lv_subject_add_observer(s_int_subject, count_observer_cb, NULL);
     TEST_ASSERT_EQUAL_UINT32(1, s_observer_hits);
 
     TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_unregister_subject(NULL, "borrowed"));
 
-    lv_subject_set_int(&s_int_subject, 8);
+    lv_subject_set_int(s_int_subject, 8);
     TEST_ASSERT_EQUAL_UINT32_MESSAGE(2, s_observer_hits,
                                      "unregistering the NAME detached observers from a borrowed subject");
-    TEST_ASSERT_EQUAL_INT32(8, lv_subject_get_int(&s_int_subject));
+    TEST_ASSERT_EQUAL_INT32(8, lv_subject_get_int(s_int_subject));
 
-    lv_subject_deinit(&s_int_subject);
+    lv_subject_delete(s_int_subject);
 }
 
 /** A scoped lookup falls back to the global scope; the reverse never happens. */
@@ -273,15 +274,15 @@ static void test_a_component_scope_sees_global_subjects_but_not_the_other_way(vo
 {
     lv_xml_component_scope_t * scope = register_bare_scope("bare_subj");
 
-    lv_subject_init_int(&s_int_subject, 3);
-    lv_subject_init_int(&s_other_int_subject, 4);
+    s_int_subject = helix_test_subject_int(3);
+    s_other_int_subject = helix_test_subject_int(4);
 
-    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_register_subject(NULL, "global_one", &s_int_subject));
-    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_register_subject(scope, "scoped_one", &s_other_int_subject));
+    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_register_subject(NULL, "global_one", s_int_subject));
+    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_register_subject(scope, "scoped_one", s_other_int_subject));
 
-    TEST_ASSERT_EQUAL_PTR_MESSAGE(&s_int_subject, lv_xml_get_subject(scope, "global_one"),
+    TEST_ASSERT_EQUAL_PTR_MESSAGE(s_int_subject, lv_xml_get_subject(scope, "global_one"),
                                   "a scoped lookup must fall back to the global scope");
-    TEST_ASSERT_EQUAL_PTR(&s_other_int_subject, lv_xml_get_subject(scope, "scoped_one"));
+    TEST_ASSERT_EQUAL_PTR(s_other_int_subject, lv_xml_get_subject(scope, "scoped_one"));
 
     log_capture_start();
     lv_subject_t * leaked = lv_xml_get_subject(NULL, "scoped_one");

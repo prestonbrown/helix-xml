@@ -1842,7 +1842,7 @@ static void screen_load_on_trigger_event_cb(lv_event_t * e)
     screen_load_anim_dsc_t * dsc = lv_event_get_user_data(e);
     LV_ASSERT_NULL(dsc);
 
-    lv_obj_t * screen = lv_display_get_screen_by_name(NULL, dsc->screen_name);
+    lv_obj_t * screen = lv_display_get_screen_by_name(lv_display_get_default(), dsc->screen_name);
     if(screen == NULL) {
         LV_LOG_WARN("No screen is found with `%s` name", dsc->screen_name);
         return;

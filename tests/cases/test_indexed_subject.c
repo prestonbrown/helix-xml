@@ -28,16 +28,16 @@
  * ---------------------------------------------------------------------------
  *
  * The subjects are file-static and registered into the GLOBAL scope, which is
- * how a consuming app publishes per-item state. They are re-initialised at the
- * top of every test that uses them, because the preceding test's lv_deinit()
- * reclaimed the pool their observer lists lived in, and deinit'd at the end so
- * nothing observes static storage across the teardown.
+ * how a consuming app publishes per-item state. Each test that uses them
+ * creates them at the top and deletes them at the end; lv_deinit() would delete
+ * any left over, so no pointer is followed across a test boundary.
  *
  * SPDX-License-Identifier: MIT
  */
 
 #include "helpers/helix_log_capture.h"
 #include "helpers/helix_test_env.h"
+#include "helpers/helix_test_subject.h"
 #include "helpers/helix_test_pump.h"
 #include "helpers/xml_assert.h"
 
@@ -62,15 +62,15 @@ void tearDown(void)
 #define IDX_SUBJECT_POOL 3
 #define IDX_SUBJECT_BUF  32
 
-static lv_subject_t g_subs[IDX_SUBJECT_POOL];
+static lv_subject_t * g_subs[IDX_SUBJECT_POOL];
 static char g_bufs[IDX_SUBJECT_POOL][IDX_SUBJECT_BUF];
 
 /** Init a pool entry and register it globally under @p name. */
 static void register_global_string(uint32_t slot, const char * name, const char * value)
 {
-    lv_subject_init_string(&g_subs[slot], g_bufs[slot], NULL, IDX_SUBJECT_BUF, value);
+    g_subs[slot] = helix_test_subject_string(g_bufs[slot], NULL, IDX_SUBJECT_BUF, value);
     TEST_ASSERT_EQUAL_INT_MESSAGE(LV_RESULT_OK,
-                                  (int)lv_xml_register_subject(NULL, name, &g_subs[slot]),
+                                  (int)lv_xml_register_subject(NULL, name, g_subs[slot]),
                                   helix_xml_assert_msgf("could not register global subject '%s'",
                                                         name));
 }
@@ -78,7 +78,7 @@ static void register_global_string(uint32_t slot, const char * name, const char 
 /** Drop every observer off the static subjects before the env tears LVGL down. */
 static void release_globals(uint32_t used)
 {
-    for(uint32_t i = 0; i < used; i++) lv_subject_deinit(&g_subs[i]);
+    for(uint32_t i = 0; i < used; i++) lv_subject_delete(g_subs[i]);
 }
 
 /*===========================================================================
@@ -122,7 +122,7 @@ static void test_the_loop_index_composes_a_per_iteration_subject_name(void)
 
     /* The binding is live, not a one-off text copy: writing to the subject
      * behind iteration 1 must move that label and only that label. */
-    lv_subject_set_string(&g_subs[1], "ONE!");
+    lv_subject_set_string(g_subs[1], "ONE!");
     helix_test_pump(30);
     ASSERT_LABEL_TEXT(lv_obj_get_child(row, 1), "ONE!");
     ASSERT_LABEL_TEXT(lv_obj_get_child(row, 0), "zero");

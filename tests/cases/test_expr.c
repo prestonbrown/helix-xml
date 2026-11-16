@@ -40,6 +40,7 @@
  * observable difference in a couple of cases. */
 #include "helpers/helix_log_capture.h"
 #include "helpers/helix_test_env.h"
+#include "helpers/helix_test_subject.h"
 #include "helpers/helix_test_pump.h"
 #include "helpers/xml_assert.h"
 
@@ -49,9 +50,13 @@
  * Unity fixture
  *--------------------------------------------------------------------------*/
 
+/* Defined with the test subjects below. */
+static void subjects_forget(void);
+
 void setUp(void)
 {
     helix_test_env_setup();
+    subjects_forget();
 }
 
 void tearDown(void)
@@ -62,26 +67,31 @@ void tearDown(void)
 /*---------------------------------------------------------------------------
  * Test subjects + resolver
  *
- * The subjects are file-static but are re-initialised at the top of every test
- * that uses them. That is safe because helix_test_env_teardown() deletes the
- * screen first, which deletes every owner object, which detaches every
- * observer - so no observer is ever left pointing at a subject that is about
- * to be re-initialised.
+ * The pool holds created subjects, recreated at the top of every test that
+ * uses them. subjects_reset() deletes the current ones first, which detaches
+ * any observer still on them. lv_deinit() at the end of a test deletes them
+ * too, so setUp() forgets the pointers rather than deleting them again.
  *--------------------------------------------------------------------------*/
 
 #define EXPR_SUBJECT_POOL 40
 
-static lv_subject_t g_subs[EXPR_SUBJECT_POOL];
+static lv_subject_t * g_subs[EXPR_SUBJECT_POOL];
 static char g_sub_names[EXPR_SUBJECT_POOL][8];
 
 /** Last name the resolver was asked for - used to observe identifier truncation. */
 static char g_last_resolved[128];
 
+static void subjects_forget(void)
+{
+    for(int i = 0; i < EXPR_SUBJECT_POOL; i++) g_subs[i] = NULL;
+}
+
 static void subjects_reset(void)
 {
     for(int i = 0; i < EXPR_SUBJECT_POOL; i++) {
         snprintf(g_sub_names[i], sizeof(g_sub_names[i]), "s%d", i);
-        lv_subject_init_int(&g_subs[i], 0);
+        lv_subject_delete(g_subs[i]);
+        g_subs[i] = helix_test_subject_int(0);
     }
     g_last_resolved[0] = '\0';
 }
@@ -99,10 +109,10 @@ static lv_subject_t * pool_resolver(void * ctx, const char * name)
 
     static const char * aliases[] = {"a", "b", "c", "d"};
     for(int i = 0; i < 4; i++) {
-        if(strcmp(name, aliases[i]) == 0) return &g_subs[i];
+        if(strcmp(name, aliases[i]) == 0) return g_subs[i];
     }
     for(int i = 0; i < EXPR_SUBJECT_POOL; i++) {
-        if(strcmp(name, g_sub_names[i]) == 0) return &g_subs[i];
+        if(strcmp(name, g_sub_names[i]) == 0) return g_subs[i];
     }
     return NULL;
 }
@@ -717,14 +727,14 @@ static void test_boolean_operators_short_circuit(void)
 static void test_eval_reads_subject_values_at_evaluation_time(void)
 {
     subjects_reset();
-    lv_subject_set_int(&g_subs[0], 7);
-    lv_subject_set_int(&g_subs[1], 3);
+    lv_subject_set_int(g_subs[0], 7);
+    lv_subject_set_int(g_subs[1], 3);
 
     lv_xml_expr_t * e = must_compile("a * 10 + b");
     TEST_ASSERT_EQUAL_INT32(73, lv_xml_expr_eval(e));
 
     /* No memoisation: the next eval sees the new values. */
-    lv_subject_set_int(&g_subs[0], 1);
+    lv_subject_set_int(g_subs[0], 1);
     TEST_ASSERT_EQUAL_INT32_MESSAGE(13, lv_xml_expr_eval(e),
                                     "eval must re-read subjects, not cache the first result");
 
@@ -738,15 +748,15 @@ static void test_subject_list_is_deduplicated_by_pointer_in_first_use_order(void
     lv_xml_expr_t * one = must_compile("a + a");
     TEST_ASSERT_EQUAL_size_t_MESSAGE(1, lv_xml_expr_subject_count(one),
                                      "the same subject twice must be collected once");
-    TEST_ASSERT_EQUAL_PTR(&g_subs[0], lv_xml_expr_subject_at(one, 0));
+    TEST_ASSERT_EQUAL_PTR(g_subs[0], lv_xml_expr_subject_at(one, 0));
     lv_xml_expr_free(one);
 
     /* Order is first occurrence, left to right through the source. */
     lv_xml_expr_t * two = must_compile("b + a + b");
     TEST_ASSERT_EQUAL_size_t(2, lv_xml_expr_subject_count(two));
-    TEST_ASSERT_EQUAL_PTR_MESSAGE(&g_subs[1], lv_xml_expr_subject_at(two, 0),
+    TEST_ASSERT_EQUAL_PTR_MESSAGE(g_subs[1], lv_xml_expr_subject_at(two, 0),
                                   "\"b\" appears first in the source so it must be subject 0");
-    TEST_ASSERT_EQUAL_PTR(&g_subs[0], lv_xml_expr_subject_at(two, 1));
+    TEST_ASSERT_EQUAL_PTR(g_subs[0], lv_xml_expr_subject_at(two, 1));
     lv_xml_expr_free(two);
 }
 
@@ -789,7 +799,7 @@ static void test_more_than_32_distinct_subjects_are_dropped_from_the_dependency_
     size_t pos = 0;
     for(int i = 0; i <= 32; i++) {
         pos += (size_t)snprintf(src + pos, sizeof(src) - pos, "%ss%d", i ? "+" : "", i);
-        lv_subject_set_int(&g_subs[i], 1);
+        lv_subject_set_int(g_subs[i], 1);
     }
 
     log_capture_start();
@@ -825,7 +835,7 @@ static void bind_probe_cb(void * user_data, int32_t value)
 static void test_bind_fires_once_immediately_with_the_current_value(void)
 {
     subjects_reset();
-    lv_subject_set_int(&g_subs[0], 21);
+    lv_subject_set_int(g_subs[0], 21);
 
     lv_obj_t * owner = lv_obj_create(helix_test_env_screen());
     bind_probe_t probe = {0, 0};
@@ -851,18 +861,18 @@ static void test_bind_reevaluates_when_any_referenced_subject_changes(void)
     lv_xml_expr_bind_t * h = lv_xml_expr_bind(must_compile("a + b"), owner, bind_probe_cb, &probe);
     TEST_ASSERT_EQUAL_INT(1, probe.calls);
 
-    lv_subject_set_int(&g_subs[0], 10);
+    lv_subject_set_int(g_subs[0], 10);
     helix_test_pump(30);
     TEST_ASSERT_EQUAL_INT_MESSAGE(2, probe.calls, "changing \"a\" must re-fire the binding");
     TEST_ASSERT_EQUAL_INT32(10, probe.last);
 
-    lv_subject_set_int(&g_subs[1], 5);
+    lv_subject_set_int(g_subs[1], 5);
     helix_test_pump(30);
     TEST_ASSERT_EQUAL_INT_MESSAGE(3, probe.calls, "changing \"b\" must re-fire the binding");
     TEST_ASSERT_EQUAL_INT32(15, probe.last);
 
     /* A subject the expression does not reference must not fire it. */
-    lv_subject_set_int(&g_subs[2], 99);
+    lv_subject_set_int(g_subs[2], 99);
     helix_test_pump(30);
     TEST_ASSERT_EQUAL_INT_MESSAGE(3, probe.calls,
                                   "an unreferenced subject must not trigger the binding");
@@ -881,7 +891,7 @@ static void test_bind_fires_once_per_change_for_a_repeated_subject(void)
     lv_xml_expr_bind_t * h = lv_xml_expr_bind(must_compile("a + a"), owner, bind_probe_cb, &probe);
     TEST_ASSERT_EQUAL_INT(1, probe.calls);
 
-    lv_subject_set_int(&g_subs[0], 4);
+    lv_subject_set_int(g_subs[0], 4);
     helix_test_pump(30);
     TEST_ASSERT_EQUAL_INT_MESSAGE(2, probe.calls,
                                   "\"a + a\" registers one observer, so one change is one callback");
@@ -898,13 +908,13 @@ static void test_unbind_detaches_the_binding(void)
     bind_probe_t probe = {0, 0};
 
     lv_xml_expr_bind_t * h = lv_xml_expr_bind(must_compile("a"), owner, bind_probe_cb, &probe);
-    lv_subject_set_int(&g_subs[0], 1);
+    lv_subject_set_int(g_subs[0], 1);
     helix_test_pump(30);
     TEST_ASSERT_EQUAL_INT(2, probe.calls);
 
     lv_xml_expr_unbind(h);
 
-    lv_subject_set_int(&g_subs[0], 2);
+    lv_subject_set_int(g_subs[0], 2);
     helix_test_pump(30);
     TEST_ASSERT_EQUAL_INT_MESSAGE(2, probe.calls,
                                   "no callback may fire after unbind");
@@ -937,11 +947,12 @@ static void test_a_deinitialised_subject_stops_the_binding_whichever_subject_fir
     lv_xml_expr_bind_t * h = lv_xml_expr_bind(must_compile("a + b"), owner, bind_probe_cb, &probe);
     TEST_ASSERT_EQUAL_INT(1, probe.calls);
 
-    lv_subject_deinit(&g_subs[1]);
-    lv_subject_set_int(&g_subs[0], 5);
+    lv_subject_delete(g_subs[1]);
+    g_subs[1] = NULL;
+    lv_subject_set_int(g_subs[0], 5);
     TEST_ASSERT_EQUAL_INT_MESSAGE(1, probe.calls, "the expression read a deinitialised subject");
 
-    lv_subject_set_int(&g_subs[0], 6);
+    lv_subject_set_int(g_subs[0], 6);
     TEST_ASSERT_EQUAL_INT(1, probe.calls);
 
     lv_xml_expr_unbind(h);
@@ -956,10 +967,11 @@ static void test_unbind_after_a_subject_was_deinitialised(void)
     bind_probe_t probe = {0, 0};
     lv_xml_expr_bind_t * h = lv_xml_expr_bind(must_compile("a + b"), owner, bind_probe_cb, &probe);
 
-    lv_subject_deinit(&g_subs[1]);
+    lv_subject_delete(g_subs[1]);
+    g_subs[1] = NULL;
     lv_xml_expr_unbind(h); /* the deinitialised subject's observer is gone: not removed twice */
 
-    lv_subject_set_int(&g_subs[0], 5);
+    lv_subject_set_int(g_subs[0], 5);
     TEST_ASSERT_EQUAL_INT(1, probe.calls);
     lv_obj_delete(owner);
     subjects_reset();
@@ -985,14 +997,15 @@ static void test_an_event_at_a_freed_observer_address_does_not_revive_a_binding(
         lv_event_dsc_t * dsc = lv_obj_get_event_dsc(owner, i);
         if(lv_event_dsc_get_user_data(dsc) == h) continue; /* the binding's own delete hook */
         lv_observer_t * o = lv_event_dsc_get_user_data(dsc);
-        if(o->subject == &g_subs[1]) freed_observer = o;
+        if(o->subject == g_subs[1]) freed_observer = o;
     }
     TEST_ASSERT_NOT_NULL(freed_observer);
 
-    lv_subject_deinit(&g_subs[1]);
+    lv_subject_delete(g_subs[1]);
+    g_subs[1] = NULL;
     lv_obj_add_event_cb(owner, noop_event_cb, LV_EVENT_CLICKED, freed_observer);
 
-    lv_subject_set_int(&g_subs[0], 5);
+    lv_subject_set_int(g_subs[0], 5);
     TEST_ASSERT_EQUAL_INT_MESSAGE(1, probe.calls, "a stopped binding came back");
 
     lv_xml_expr_unbind(h); /* would free that address a second time */
@@ -1013,7 +1026,7 @@ static void test_deleting_the_owner_detaches_the_binding(void)
     lv_obj_delete(owner);
     helix_test_pump(30);
 
-    lv_subject_set_int(&g_subs[0], 12);
+    lv_subject_set_int(g_subs[0], 12);
     helix_test_pump(30);
 
     TEST_ASSERT_EQUAL_INT_MESSAGE(1, probe.calls,
@@ -1116,22 +1129,22 @@ static void test_the_bind_lifecycle_returns_the_heap_to_steady_state(void)
 
 /** Storage for the per-iteration string subjects the splice tests bind to. */
 #define SPLICE_SLOTS 4
-static lv_subject_t g_slot_subjects[SPLICE_SLOTS];
+static lv_subject_t * g_slot_subjects[SPLICE_SLOTS];
 static char g_slot_bufs[SPLICE_SLOTS][32];
 
 static void register_slot_string(uint32_t slot, const char * name, const char * value)
 {
-    lv_subject_init_string(&g_slot_subjects[slot], g_slot_bufs[slot], NULL,
+    g_slot_subjects[slot] = helix_test_subject_string(g_slot_bufs[slot], NULL,
                            sizeof(g_slot_bufs[slot]), value);
     TEST_ASSERT_EQUAL_INT_MESSAGE(LV_RESULT_OK,
-                                  (int)lv_xml_register_subject(NULL, name, &g_slot_subjects[slot]),
+                                  (int)lv_xml_register_subject(NULL, name, g_slot_subjects[slot]),
                                   helix_xml_assert_msgf("could not register subject '%s'", name));
 }
 
 /** Drop every observer off the static subjects before the env tears LVGL down. */
 static void release_slots(uint32_t used)
 {
-    for(uint32_t i = 0; i < used; i++) lv_subject_deinit(&g_slot_subjects[i]);
+    for(uint32_t i = 0; i < used; i++) lv_subject_delete(g_slot_subjects[i]);
 }
 
 static const char * SPLICE_NAME_XML =
@@ -1268,10 +1281,10 @@ static const char * SPLICE_SUBJECT_XML =
 static void test_subject_operands_in_a_splice_are_resolved_once(void)
 {
     subjects_reset();
-    lv_subject_set_int(&g_subs[0], 10); /* base  */
-    lv_subject_set_int(&g_subs[1], 3);  /* scale */
-    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_register_subject(NULL, "base", &g_subs[0]));
-    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_register_subject(NULL, "scale", &g_subs[1]));
+    lv_subject_set_int(g_subs[0], 10); /* base  */
+    lv_subject_set_int(g_subs[1], 3);  /* scale */
+    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_register_subject(NULL, "base", g_subs[0]));
+    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_register_subject(NULL, "scale", g_subs[1]));
 
     ASSERT_XML_REGISTERS("expr_splice_subj", SPLICE_SUBJECT_XML);
 
@@ -1281,7 +1294,7 @@ static void test_subject_operands_in_a_splice_are_resolved_once(void)
     lv_obj_t * g = ASSERT_NAMED(root, "g");
     ASSERT_STYLE_INT(g, LV_STYLE_WIDTH, LV_PART_MAIN, 30);
 
-    lv_subject_set_int(&g_subs[0], 100); /* would be 300 if this were a binding */
+    lv_subject_set_int(g_subs[0], 100); /* would be 300 if this were a binding */
     helix_test_pump(30);
     ASSERT_STYLE_INT(g, LV_STYLE_WIDTH, LV_PART_MAIN, 30);
 }

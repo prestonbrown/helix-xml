@@ -57,6 +57,7 @@
  * every per-row problem, so the warning is the only observable difference. */
 #include "helpers/helix_log_capture.h"
 #include "helpers/helix_test_env.h"
+#include "helpers/helix_test_subject.h"
 #include "helpers/helix_test_pump.h"
 #include "helpers/xml_assert.h"
 
@@ -610,10 +611,10 @@ static void test_text_beside_bind_text_implies_no_tag(void)
     register_pack(PACK_COMPLETE);
     lv_translation_set_language("de");
 
-    static lv_subject_t subj;
+    static lv_subject_t * subj;
     static char buf[16];
-    lv_subject_init_string(&subj, buf, NULL, sizeof(buf), "live");
-    lv_xml_register_subject(NULL, "implied_subj", &subj);
+    subj = helix_test_subject_string(buf, NULL, sizeof(buf), "live");
+    lv_xml_register_subject(NULL, "implied_subj", subj);
 
     lv_obj_t * card =
         create_implied_card("<lv_label name=\"l\" text=\"dog\" bind_text=\"implied_subj\"/>");

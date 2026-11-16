@@ -62,6 +62,7 @@
 
 #include "helpers/helix_log_capture.h"
 #include "helpers/helix_test_env.h"
+#include "helpers/helix_test_subject.h"
 #include "helpers/helix_test_pump.h"
 #include "helpers/xml_assert.h"
 
@@ -177,20 +178,19 @@ static const char * COMP_GLOBAL_COND =
     "</component>";
 
 /*
- * File-static so it survives the lv_deinit() at the end of each test. Every
- * test that uses it re-inits it first: lv_subject_init_int() resets subs_ll, so
- * a stale observer list left by a previous LVGL cycle is dropped rather than
- * walked.
+ * File-static so a registered subject outlives the test body. lv_deinit() at
+ * the end of each test deletes the created subject, so every test that uses it
+ * creates it first and the pointer is never followed across a test boundary.
  */
-static lv_subject_t s_global_cond;
+static lv_subject_t * s_global_cond;
 
-/** Re-init the global cond and publish it into the global XML scope. */
+/** Create the global cond and publish it into the global XML scope. */
 static void global_cond_register(int32_t initial)
 {
-    lv_subject_init_int(&s_global_cond, initial);
+    s_global_cond = helix_test_subject_int(initial);
     TEST_ASSERT_EQUAL_INT_MESSAGE(
         LV_RESULT_OK,
-        (int)lv_xml_register_subject(NULL, GLOBAL_COND_NAME, &s_global_cond),
+        (int)lv_xml_register_subject(NULL, GLOBAL_COND_NAME, s_global_cond),
         "could not register the cond subject into the global scope");
 }
 
@@ -578,7 +578,7 @@ static void test_a_cond_change_after_the_instance_is_deleted_is_harmless(void)
     ASSERT_CHILD_COUNT(screen, 0);
 
     /* The dangerous window: the shared subject changes with no instance alive. */
-    lv_subject_set_int(&s_global_cond, 0);
+    lv_subject_set_int(s_global_cond, 0);
     helix_test_pump(30);
 
     /* Still registered, still correct, and now reflecting the new value. */
@@ -615,7 +615,7 @@ static void test_unregister_after_deleting_the_instance_detaches_the_cond(void)
     TEST_ASSERT_NULL(lv_xml_component_get_scope("if_unreg_after"));
 
     /* Must reach no record and no observer. */
-    lv_subject_set_int(&s_global_cond, 0);
+    lv_subject_set_int(s_global_cond, 0);
     helix_test_pump(20);
 
     /* Nothing was resurrected onto the screen by the change. */
@@ -651,7 +651,7 @@ static void test_unregister_while_the_instance_is_alive_keeps_the_cond_live(void
     TEST_ASSERT_NULL_MESSAGE(lv_xml_component_get_scope("if_unreg_alive"),
                              "a retired scope must stop being findable immediately");
 
-    lv_subject_set_int(&s_global_cond, 0);
+    lv_subject_set_int(s_global_cond, 0);
     helix_test_pump(30);
 
     /* Still bound: the deferred scope kept the record, the bind and the captured
@@ -693,7 +693,7 @@ static void test_re_instantiation_does_not_accumulate_stale_observers(void)
     helix_test_pump(30);
     ASSERT_NAMED(second, "t");
 
-    lv_subject_set_int(&s_global_cond, 0);
+    lv_subject_set_int(s_global_cond, 0);
     helix_test_pump(30);
     ASSERT_NO_NAMED(second, "t");
     ASSERT_NAMED(second, "f");

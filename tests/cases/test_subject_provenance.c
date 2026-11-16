@@ -57,8 +57,8 @@
  *    lv_xml_subject_t record. This is the one direct observation of provenance
  *    that exists; everything else is a consequence of it.
  *  - EXACT observer counts, walked off `lv_subject_t.subs_ll`.
- *    lv_subject_deinit() rips every observer off, so a count that survives a
- *    teardown proves the subject was not deinit'd, and a count that drops to
+ *    lv_subject_delete() rips every observer off, so a count that survives a
+ *    teardown proves the subject was not deleted, and a count that drops to
  *    zero on widget delete proves the widget's own detach path still works.
  *  - heap accounting across steady-state cycles (lv_mem_monitor free_size), for
  *    the owned side: a per-cycle leak shows up as free_size falling
@@ -90,6 +90,7 @@
 
 #include "helpers/helix_log_capture.h"
 #include "helpers/helix_test_env.h"
+#include "helpers/helix_test_subject.h"
 #include "helpers/helix_test_pump.h"
 #include "helpers/xml_assert.h"
 
@@ -117,14 +118,14 @@ void tearDown(void)
  * File-static, never stack: a subject registered into a scope routinely
  * outlives the test body. Widgets observing it are deleted in tearDown, after
  * the function has returned, so a stack subject would be a use-after-free in
- * the harness rather than a finding about the engine. Every test re-inits the
- * ones it uses - lv_subject_init_* resets subs_ll, so no observer list from a
- * previous LVGL cycle is ever walked.
+ * the harness rather than a finding about the engine. lv_deinit() at the end of
+ * each test deletes every created subject, so every test creates the ones it
+ * uses and no pointer is followed across a test boundary.
  *--------------------------------------------------------------------------*/
 
-static lv_subject_t s_borrowed;
-static lv_subject_t s_shared;
-static lv_subject_t s_other;
+static lv_subject_t * s_borrowed;
+static lv_subject_t * s_shared;
+static lv_subject_t * s_other;
 
 /*---------------------------------------------------------------------------
  * Helpers
@@ -146,8 +147,8 @@ static void probe_cb(lv_observer_t * observer, lv_subject_t * subject)
 /**
  * How many observers are attached to @p subject right now.
  *
- * lv_subject_deinit() empties subs_ll, so this is the direct, exact way to
- * tell "the scope left my subject alone" from "the scope deinit'd it" - and to
+ * Releasing a subject empties subs_ll, so this is the direct, exact way to
+ * tell "the scope left my subject alone" from "the scope released it" - and to
  * tell a widget that detached cleanly on delete from one that never did.
  */
 static uint32_t subject_observer_count(lv_subject_t * subject)
@@ -320,17 +321,17 @@ static void test_the_parser_records_its_own_subjects_as_owned_and_the_public_api
                                     "the <subject> did not carry its declared value");
 
     /* Application storage, through the public entry point, into the SAME list. */
-    lv_subject_init_int(&s_borrowed, 41);
+    s_borrowed = helix_test_subject_int(41);
     TEST_ASSERT_EQUAL_INT(LV_RESULT_OK,
-                          (int)lv_xml_register_subject(scope, "borrowed_flag", &s_borrowed));
+                          (int)lv_xml_register_subject(scope, "borrowed_flag", s_borrowed));
     ASSERT_BORROWED(scope, "borrowed_flag");
-    TEST_ASSERT_EQUAL_PTR_MESSAGE(&s_borrowed, lv_xml_get_subject(scope, "borrowed_flag"),
+    TEST_ASSERT_EQUAL_PTR_MESSAGE(s_borrowed, lv_xml_get_subject(scope, "borrowed_flag"),
                                   "the scope handed back a different subject than was registered");
 
     /* Registering one does not disturb the other's provenance. */
     ASSERT_OWNED(scope, "owned_int");
 
-    lv_subject_deinit(&s_borrowed);
+    lv_subject_delete(s_borrowed);
 }
 
 /**
@@ -367,14 +368,14 @@ static void test_re_registering_an_owned_name_releases_the_subject_the_scope_hel
     TEST_ASSERT_NOT_NULL(displaced);
     TEST_ASSERT_TRUE(scope_holds_subject(scope, displaced));
 
-    lv_subject_init_int(&s_other, 123);
+    s_other = helix_test_subject_int(123);
     size_t before = heap_free_size();
     TEST_ASSERT_EQUAL_INT(LV_RESULT_OK,
-                          (int)lv_xml_register_subject(scope, "owned_int", &s_other));
+                          (int)lv_xml_register_subject(scope, "owned_int", s_other));
     size_t after = heap_free_size();
 
     ASSERT_BORROWED(scope, "owned_int");
-    TEST_ASSERT_EQUAL_PTR_MESSAGE(&s_other, lv_xml_get_subject(scope, "owned_int"),
+    TEST_ASSERT_EQUAL_PTR_MESSAGE(s_other, lv_xml_get_subject(scope, "owned_int"),
                                   "the second registration of the name must win");
 
     /* Gone, not merely orphaned: nothing in the scope still points at it. The
@@ -389,16 +390,16 @@ static void test_re_registering_an_owned_name_releases_the_subject_the_scope_hel
     /* The consequence that matters: teardown must now leave the caller's
      * storage alone, even though the name arrived from XML. */
     observer_probe_t probe = {0, 0};
-    TEST_ASSERT_NOT_NULL(lv_subject_add_observer(&s_other, probe_cb, &probe));
+    TEST_ASSERT_NOT_NULL(lv_subject_add_observer(s_other, probe_cb, &probe));
 
     TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_component_unregister("prov_reclaim"));
 
-    lv_subject_set_int(&s_other, 124);
+    lv_subject_set_int(s_other, 124);
     TEST_ASSERT_EQUAL_UINT32_MESSAGE(2, probe.fired,
                                      "teardown deinit'd a subject that was re-registered as borrowed");
     TEST_ASSERT_EQUAL_INT32(124, probe.last_value);
 
-    lv_subject_deinit(&s_other);
+    lv_subject_delete(s_other);
 }
 
 /**
@@ -422,14 +423,14 @@ static void test_re_registering_an_owned_string_name_releases_its_buffers(void)
     TEST_ASSERT_NOT_NULL(displaced);
     TEST_ASSERT_EQUAL_STRING("hello", lv_subject_get_string(displaced));
 
-    lv_subject_init_int(&s_other, 55);
+    s_other = helix_test_subject_int(55);
     size_t before = heap_free_size();
     TEST_ASSERT_EQUAL_INT(LV_RESULT_OK,
-                          (int)lv_xml_register_subject(scope, "owned_str", &s_other));
+                          (int)lv_xml_register_subject(scope, "owned_str", s_other));
     size_t after = heap_free_size();
 
     ASSERT_BORROWED(scope, "owned_str");
-    TEST_ASSERT_EQUAL_PTR(&s_other, lv_xml_get_subject(scope, "owned_str"));
+    TEST_ASSERT_EQUAL_PTR(s_other, lv_xml_get_subject(scope, "owned_str"));
     TEST_ASSERT_FALSE_MESSAGE(scope_holds_subject(scope, displaced),
                               "the displaced string subject is still reachable from the scope");
 
@@ -442,7 +443,7 @@ static void test_re_registering_an_owned_string_name_releases_its_buffers(void)
     TEST_ASSERT_EQUAL_INT32(7, lv_subject_get_int(lv_xml_get_subject(scope, "owned_int")));
 
     TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_component_unregister("prov_reclaim_str"));
-    lv_subject_deinit(&s_other);
+    lv_subject_delete(s_other);
 }
 
 /**
@@ -464,14 +465,14 @@ static void test_re_registering_over_owned_names_returns_the_heap_every_cycle(vo
         ASSERT_OWNED(scope, "owned_int");
         ASSERT_OWNED(scope, "owned_str");
 
-        /* Re-init every cycle: lv_subject_init_* resets subs_ll, and nothing
-         * observes these inside the loop, so no observer is ever orphaned. */
-        lv_subject_init_int(&s_other, 1);
-        lv_subject_init_int(&s_shared, 2);
+        /* Created and deleted every cycle, so they take no heap across the
+         * cycle boundary the measurement below compares. */
+        s_other = helix_test_subject_int(1);
+        s_shared = helix_test_subject_int(2);
         TEST_ASSERT_EQUAL_INT(LV_RESULT_OK,
-                              (int)lv_xml_register_subject(scope, "owned_int", &s_other));
+                              (int)lv_xml_register_subject(scope, "owned_int", s_other));
         TEST_ASSERT_EQUAL_INT(LV_RESULT_OK,
-                              (int)lv_xml_register_subject(scope, "owned_str", &s_shared));
+                              (int)lv_xml_register_subject(scope, "owned_str", s_shared));
         ASSERT_BORROWED(scope, "owned_int");
         ASSERT_BORROWED(scope, "owned_str");
 
@@ -481,14 +482,13 @@ static void test_re_registering_over_owned_names_returns_the_heap_every_cycle(vo
 
         /* Still the caller's, still usable - a release that freed the caller's
          * storage instead of the displaced one would abort before this. */
-        TEST_ASSERT_EQUAL_INT32(1, lv_subject_get_int(&s_other));
-        TEST_ASSERT_EQUAL_INT32(2, lv_subject_get_int(&s_shared));
+        TEST_ASSERT_EQUAL_INT32(1, lv_subject_get_int(s_other));
+        TEST_ASSERT_EQUAL_INT32(2, lv_subject_get_int(s_shared));
 
+        lv_subject_delete(s_other);
+        lv_subject_delete(s_shared);
         after_cycle[i] = heap_free_size();
     }
-
-    lv_subject_deinit(&s_other);
-    lv_subject_deinit(&s_shared);
 
     for(i = 2; i < 5; i++) {
         TEST_ASSERT_EQUAL_size_t_MESSAGE(
@@ -532,9 +532,9 @@ static void test_re_registering_over_a_subject_expr_detaches_its_input_observers
     lv_subject_set_int(src, 0);
     TEST_ASSERT_EQUAL_INT32(0, lv_subject_get_int(derived));
 
-    lv_subject_init_int(&s_other, 77);
+    s_other = helix_test_subject_int(77);
     TEST_ASSERT_EQUAL_INT(LV_RESULT_OK,
-                          (int)lv_xml_register_subject(scope, "derived", &s_other));
+                          (int)lv_xml_register_subject(scope, "derived", s_other));
     ASSERT_BORROWED(scope, "derived");
     TEST_ASSERT_FALSE(scope_holds_subject(scope, derived));
 
@@ -546,12 +546,12 @@ static void test_re_registering_over_a_subject_expr_detaches_its_input_observers
     /* And the input really is inert now: writing it touches nothing that was
      * released, and does not reach the caller's replacement either. */
     lv_subject_set_int(src, 1);
-    TEST_ASSERT_EQUAL_INT32_MESSAGE(77, lv_subject_get_int(&s_other),
+    TEST_ASSERT_EQUAL_INT32_MESSAGE(77, lv_subject_get_int(s_other),
                                     "the dropped expression wrote into the replacement subject");
 
     TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_component_unregister("prov_expr"));
-    TEST_ASSERT_EQUAL_INT32(77, lv_subject_get_int(&s_other));
-    lv_subject_deinit(&s_other);
+    TEST_ASSERT_EQUAL_INT32(77, lv_subject_get_int(s_other));
+    lv_subject_delete(s_other);
 }
 
 /**
@@ -599,8 +599,7 @@ static void test_re_registering_the_same_pointer_over_itself_does_not_free_it(vo
     lv_subject_set_int(same, 9);
     TEST_ASSERT_EQUAL_UINT32(3, probe.fired);
 
-    lv_subject_deinit(same);
-    lv_free(same);
+    lv_subject_delete(same);
 }
 
 /*===========================================================================
@@ -621,48 +620,48 @@ static void test_scope_teardown_does_not_free_a_borrowed_subject(void)
     lv_xml_component_scope_t * scope = lv_xml_component_get_scope("borrow_survive");
     TEST_ASSERT_NOT_NULL(scope);
 
-    lv_subject_init_int(&s_borrowed, 41);
+    s_borrowed = helix_test_subject_int(41);
     TEST_ASSERT_EQUAL_INT(LV_RESULT_OK,
-                          (int)lv_xml_register_subject(scope, "borrowed_flag", &s_borrowed));
+                          (int)lv_xml_register_subject(scope, "borrowed_flag", s_borrowed));
     ASSERT_BORROWED(scope, "borrowed_flag");
 
     observer_probe_t before = {0, 0};
-    TEST_ASSERT_NOT_NULL(lv_subject_add_observer(&s_borrowed, probe_cb, &before));
-    ASSERT_OBSERVER_COUNT(&s_borrowed, 1, "the probe observer did not attach");
+    TEST_ASSERT_NOT_NULL(lv_subject_add_observer(s_borrowed, probe_cb, &before));
+    ASSERT_OBSERVER_COUNT(s_borrowed, 1, "the probe observer did not attach");
 
-    lv_subject_set_int(&s_borrowed, 42);
+    lv_subject_set_int(s_borrowed, 42);
     TEST_ASSERT_EQUAL_UINT32(2, before.fired);
 
     TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_component_unregister("borrow_survive"));
     TEST_ASSERT_NULL(lv_xml_component_get_scope("borrow_survive"));
 
     /* Not deinit'd: the observer list is untouched. */
-    ASSERT_OBSERVER_COUNT(&s_borrowed, 1,
+    ASSERT_OBSERVER_COUNT(s_borrowed, 1,
                           "scope teardown deinit'd a BORROWED subject - every observer on it, "
                           "including ones held by other live components, was detached");
     /* Not freed, and not reset: the value is still what was last written. */
-    TEST_ASSERT_EQUAL_INT32_MESSAGE(42, lv_subject_get_int(&s_borrowed),
+    TEST_ASSERT_EQUAL_INT32_MESSAGE(42, lv_subject_get_int(s_borrowed),
                                     "the borrowed subject's value did not survive scope teardown");
 
     /* Still fully functional afterwards - the existing observer fires, and a
      * new one can be attached and driven. */
-    lv_subject_set_int(&s_borrowed, 99);
+    lv_subject_set_int(s_borrowed, 99);
     TEST_ASSERT_EQUAL_UINT32(3, before.fired);
     TEST_ASSERT_EQUAL_INT32(99, before.last_value);
 
     observer_probe_t after = {0, 0};
-    TEST_ASSERT_NOT_NULL(lv_subject_add_observer(&s_borrowed, probe_cb, &after));
+    TEST_ASSERT_NOT_NULL(lv_subject_add_observer(s_borrowed, probe_cb, &after));
     TEST_ASSERT_EQUAL_UINT32_MESSAGE(1, after.fired,
                                      "lv_subject_add_observer must fire once with the current value");
     TEST_ASSERT_EQUAL_INT32(99, after.last_value);
-    ASSERT_OBSERVER_COUNT(&s_borrowed, 2, "the second observer did not attach");
+    ASSERT_OBSERVER_COUNT(s_borrowed, 2, "the second observer did not attach");
 
-    lv_subject_deinit(&s_borrowed);
+    lv_subject_delete(s_borrowed);
 }
 
 /**
- * Failure mode 2, the one that does not crash: deinit'ing a borrowed subject
- * instead of freeing it. lv_subject_deinit() walks subs_ll and removes EVERY
+ * Failure mode 2, the one that does not crash: releasing a borrowed subject
+ * instead of leaving it alone. Deleting it walks subs_ll and removes EVERY
  * observer, including the ones live widgets in OTHER components hold, leaving
  * them silently unbound - the component still renders, it just stops reacting.
  *
@@ -679,9 +678,9 @@ static void test_scope_teardown_leaves_another_components_observers_attached(voi
     TEST_ASSERT_NOT_NULL(user_scope);
     TEST_ASSERT_NOT_NULL(lender_scope);
 
-    lv_subject_init_int(&s_shared, 0);
-    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_register_subject(user_scope, "shared", &s_shared));
-    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_register_subject(lender_scope, "shared", &s_shared));
+    s_shared = helix_test_subject_int(0);
+    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_register_subject(user_scope, "shared", s_shared));
+    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_register_subject(lender_scope, "shared", s_shared));
     ASSERT_BORROWED(user_scope, "shared");
     ASSERT_BORROWED(lender_scope, "shared");
 
@@ -691,13 +690,13 @@ static void test_scope_teardown_leaves_another_components_observers_attached(voi
 
     /* One observer from the binding, one from the probe, and nothing else. */
     observer_probe_t probe = {0, 0};
-    TEST_ASSERT_NOT_NULL(lv_subject_add_observer(&s_shared, probe_cb, &probe));
-    ASSERT_OBSERVER_COUNT(&s_shared, 2, "expected the bind_flag observer plus the probe");
+    TEST_ASSERT_NOT_NULL(lv_subject_add_observer(s_shared, probe_cb, &probe));
+    ASSERT_OBSERVER_COUNT(s_shared, 2, "expected the bind_flag observer plus the probe");
 
     /* The binding is live before teardown. */
-    lv_subject_set_int(&s_shared, 1);
+    lv_subject_set_int(s_shared, 1);
     ASSERT_FLAG(box, LV_OBJ_FLAG_HIDDEN);
-    lv_subject_set_int(&s_shared, 0);
+    lv_subject_set_int(s_shared, 0);
     ASSERT_NO_FLAG(box, LV_OBJ_FLAG_HIDDEN);
     TEST_ASSERT_EQUAL_UINT32(3, probe.fired);
 
@@ -705,14 +704,14 @@ static void test_scope_teardown_leaves_another_components_observers_attached(voi
      * it (heap abort) nor deinit it (which would strip the user's observer). */
     TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_component_unregister("borrow_lender"));
 
-    ASSERT_OBSERVER_COUNT(&s_shared, 2,
+    ASSERT_OBSERVER_COUNT(s_shared, 2,
                           "unregistering the LENDER detached observers belonging to another "
                           "component's live widgets");
 
     /* And they are not merely present, they still work. */
-    lv_subject_set_int(&s_shared, 1);
+    lv_subject_set_int(s_shared, 1);
     ASSERT_FLAG(box, LV_OBJ_FLAG_HIDDEN);
-    lv_subject_set_int(&s_shared, 0);
+    lv_subject_set_int(s_shared, 0);
     ASSERT_NO_FLAG(box, LV_OBJ_FLAG_HIDDEN);
     TEST_ASSERT_EQUAL_UINT32_MESSAGE(5, probe.fired,
                                      "the probe observer stopped firing after an unrelated scope "
@@ -720,11 +719,11 @@ static void test_scope_teardown_leaves_another_components_observers_attached(voi
 
     lv_obj_delete(inst);
     helix_test_pump(30);
-    ASSERT_OBSERVER_COUNT(&s_shared, 1,
+    ASSERT_OBSERVER_COUNT(s_shared, 1,
                           "deleting the instance did not detach its bind_flag observer");
 
     TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_component_unregister("borrow_user"));
-    lv_subject_deinit(&s_shared);
+    lv_subject_delete(s_shared);
 }
 
 /**
@@ -798,14 +797,14 @@ static void test_re_registering_over_a_scope_does_not_free_its_borrowed_subject(
     lv_xml_component_scope_t * old_scope = lv_xml_component_get_scope("replace_borrow");
     TEST_ASSERT_NOT_NULL(old_scope);
 
-    lv_subject_init_int(&s_borrowed, 17);
+    s_borrowed = helix_test_subject_int(17);
     TEST_ASSERT_EQUAL_INT(LV_RESULT_OK,
-                          (int)lv_xml_register_subject(old_scope, "cpp_flag", &s_borrowed));
+                          (int)lv_xml_register_subject(old_scope, "cpp_flag", s_borrowed));
     ASSERT_BORROWED(old_scope, "cpp_flag");
 
     observer_probe_t probe = {0, 0};
-    TEST_ASSERT_NOT_NULL(lv_subject_add_observer(&s_borrowed, probe_cb, &probe));
-    ASSERT_OBSERVER_COUNT(&s_borrowed, 1, "the probe observer did not attach");
+    TEST_ASSERT_NOT_NULL(lv_subject_add_observer(s_borrowed, probe_cb, &probe));
+    ASSERT_OBSERVER_COUNT(s_borrowed, 1, "the probe observer did not attach");
 
     /* Replace the definition WITHOUT unregistering first. The old scope is
      * freed inside registration; `old_scope` is dangling from here on and is
@@ -818,16 +817,16 @@ static void test_re_registering_over_a_scope_does_not_free_its_borrowed_subject(
     ASSERT_ABSENT(fresh, "cpp_flag");
 
     /* The application's storage is untouched by the scope that was dropped. */
-    ASSERT_OBSERVER_COUNT(&s_borrowed, 1,
+    ASSERT_OBSERVER_COUNT(s_borrowed, 1,
                           "replacing a component definition deinit'd a subject the REPLACED scope "
                           "only borrowed");
-    TEST_ASSERT_EQUAL_INT32(17, lv_subject_get_int(&s_borrowed));
-    lv_subject_set_int(&s_borrowed, 18);
+    TEST_ASSERT_EQUAL_INT32(17, lv_subject_get_int(s_borrowed));
+    lv_subject_set_int(s_borrowed, 18);
     TEST_ASSERT_EQUAL_UINT32(2, probe.fired);
     TEST_ASSERT_EQUAL_INT32(18, probe.last_value);
 
     TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_component_unregister("replace_borrow"));
-    lv_subject_deinit(&s_borrowed);
+    lv_subject_delete(s_borrowed);
 }
 
 /*===========================================================================
@@ -851,13 +850,13 @@ static void test_unregister_subject_leaves_a_borrowed_subject_intact(void)
     lv_xml_component_scope_t * scope = lv_xml_component_get_scope("unreg_borrowed");
     TEST_ASSERT_NOT_NULL(scope);
 
-    lv_subject_init_int(&s_borrowed, 5);
+    s_borrowed = helix_test_subject_int(5);
     TEST_ASSERT_EQUAL_INT(LV_RESULT_OK,
-                          (int)lv_xml_register_subject(scope, "pool_slot_0", &s_borrowed));
+                          (int)lv_xml_register_subject(scope, "pool_slot_0", s_borrowed));
     ASSERT_BORROWED(scope, "pool_slot_0");
 
     observer_probe_t probe = {0, 0};
-    TEST_ASSERT_NOT_NULL(lv_subject_add_observer(&s_borrowed, probe_cb, &probe));
+    TEST_ASSERT_NOT_NULL(lv_subject_add_observer(s_borrowed, probe_cb, &probe));
     TEST_ASSERT_EQUAL_UINT32(1, probe.fired);
 
     TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_unregister_subject(scope, "pool_slot_0"));
@@ -872,15 +871,15 @@ static void test_unregister_subject_leaves_a_borrowed_subject_intact(void)
     /* ...but the subject is untouched: not deinit'd (the observer is still on
      * it and still fires) and not freed, which is what lets the caller deinit
      * it afterwards on its own terms. */
-    ASSERT_OBSERVER_COUNT(&s_borrowed, 1,
+    ASSERT_OBSERVER_COUNT(s_borrowed, 1,
                           "lv_xml_unregister_subject deinit'd a BORROWED subject");
-    TEST_ASSERT_EQUAL_INT32(5, lv_subject_get_int(&s_borrowed));
+    TEST_ASSERT_EQUAL_INT32(5, lv_subject_get_int(s_borrowed));
 
-    lv_subject_set_int(&s_borrowed, 6);
+    lv_subject_set_int(s_borrowed, 6);
     TEST_ASSERT_EQUAL_UINT32(2, probe.fired);
     TEST_ASSERT_EQUAL_INT32(6, probe.last_value);
 
-    lv_subject_deinit(&s_borrowed);
+    lv_subject_delete(s_borrowed);
     TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_component_unregister("unreg_borrowed"));
 }
 
@@ -1013,11 +1012,11 @@ static void test_a_hot_reload_cycle_carries_borrowed_subjects_into_the_fresh_sco
 
     ASSERT_XML_REGISTERS("reload_rt", V1);
 
-    lv_subject_init_int(&s_borrowed, 0);
+    s_borrowed = helix_test_subject_int(0);
     lv_xml_component_scope_t * scope = lv_xml_component_get_scope("reload_rt");
     TEST_ASSERT_NOT_NULL(scope);
     TEST_ASSERT_EQUAL_INT(LV_RESULT_OK,
-                          (int)lv_xml_register_subject(scope, "cpp_flag", &s_borrowed));
+                          (int)lv_xml_register_subject(scope, "cpp_flag", s_borrowed));
 
     /* v1 resolves both provenances. */
     ASSERT_BORROWED(scope, "cpp_flag");
@@ -1031,7 +1030,7 @@ static void test_a_hot_reload_cycle_carries_borrowed_subjects_into_the_fresh_sco
                                      "an owned <subject> re-registered through the public API would "
                                      "silently become borrowed and then leak");
     TEST_ASSERT_EQUAL_STRING("cpp_flag", snapshot[0].name);
-    TEST_ASSERT_EQUAL_PTR(&s_borrowed, snapshot[0].subject);
+    TEST_ASSERT_EQUAL_PTR(s_borrowed, snapshot[0].subject);
 
     TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_component_unregister("reload_rt"));
     ASSERT_XML_REGISTERS("reload_rt", V2);
@@ -1049,7 +1048,7 @@ static void test_a_hot_reload_cycle_carries_borrowed_subjects_into_the_fresh_sco
     ASSERT_OWNED(fresh, "xml_owned");
 
     /* The borrowed one is the SAME object, still resolvable, still borrowed. */
-    TEST_ASSERT_EQUAL_PTR_MESSAGE(&s_borrowed, lv_xml_get_subject(fresh, "cpp_flag"),
+    TEST_ASSERT_EQUAL_PTR_MESSAGE(s_borrowed, lv_xml_get_subject(fresh, "cpp_flag"),
                                   "the borrowed subject did not survive the reload cycle");
     ASSERT_BORROWED(fresh, "cpp_flag");
 
@@ -1058,11 +1057,11 @@ static void test_a_hot_reload_cycle_carries_borrowed_subjects_into_the_fresh_sco
     lv_obj_t * inst = XML_CREATE(helix_test_env_screen(), "reload_rt", NULL);
     helix_test_pump(30);
     lv_obj_t * box = ASSERT_NAMED(inst, "box");
-    ASSERT_OBSERVER_COUNT(&s_borrowed, 1, "the reloaded definition's bind_flag never attached");
+    ASSERT_OBSERVER_COUNT(s_borrowed, 1, "the reloaded definition's bind_flag never attached");
 
-    lv_subject_set_int(&s_borrowed, 1);
+    lv_subject_set_int(s_borrowed, 1);
     ASSERT_FLAG(box, LV_OBJ_FLAG_HIDDEN);
-    lv_subject_set_int(&s_borrowed, 0);
+    lv_subject_set_int(s_borrowed, 0);
     ASSERT_NO_FLAG(box, LV_OBJ_FLAG_HIDDEN);
 
     /* v2's own edit came through too, so this really is the new definition. */
@@ -1071,7 +1070,7 @@ static void test_a_hot_reload_cycle_carries_borrowed_subjects_into_the_fresh_sco
     lv_obj_delete(inst);
     helix_test_pump(30);
     TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_component_unregister("reload_rt"));
-    lv_subject_deinit(&s_borrowed);
+    lv_subject_delete(s_borrowed);
 }
 
 /*===========================================================================
@@ -1100,18 +1099,18 @@ static void test_deleting_a_widget_after_its_scope_is_gone_detaches_its_observer
     lv_xml_component_scope_t * scope = lv_xml_component_get_scope("teardown_borrowed");
     TEST_ASSERT_NOT_NULL(scope);
 
-    lv_subject_init_int(&s_shared, 0);
-    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_register_subject(scope, "shared", &s_shared));
+    s_shared = helix_test_subject_int(0);
+    TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_register_subject(scope, "shared", s_shared));
 
     lv_obj_t * inst = XML_CREATE(helix_test_env_screen(), "teardown_borrowed", NULL);
     helix_test_pump(30);
     lv_obj_t * box = ASSERT_NAMED(inst, "box");
-    ASSERT_OBSERVER_COUNT(&s_shared, 1, "bind_flag_if_eq did not attach an observer");
+    ASSERT_OBSERVER_COUNT(s_shared, 1, "bind_flag_if_eq did not attach an observer");
 
     /* Live before teardown. */
-    lv_subject_set_int(&s_shared, 1);
+    lv_subject_set_int(s_shared, 1);
     ASSERT_FLAG(box, LV_OBJ_FLAG_HIDDEN);
-    lv_subject_set_int(&s_shared, 0);
+    lv_subject_set_int(s_shared, 0);
     ASSERT_NO_FLAG(box, LV_OBJ_FLAG_HIDDEN);
 
     TEST_ASSERT_EQUAL_INT(LV_RESULT_OK, (int)lv_xml_component_unregister("teardown_borrowed"));
@@ -1119,9 +1118,9 @@ static void test_deleting_a_widget_after_its_scope_is_gone_detaches_its_observer
 
     /* The widget outlives its component and its observer is still attached -
      * the subject was borrowed, so teardown had no business touching either. */
-    ASSERT_OBSERVER_COUNT(&s_shared, 1,
+    ASSERT_OBSERVER_COUNT(s_shared, 1,
                           "scope teardown detached the live widget's observer from a borrowed subject");
-    lv_subject_set_int(&s_shared, 1);
+    lv_subject_set_int(s_shared, 1);
     ASSERT_FLAG(box, LV_OBJ_FLAG_HIDDEN);
 
     /* Deleting the instance now is what used to reach into freed memory. The
@@ -1129,15 +1128,15 @@ static void test_deleting_a_widget_after_its_scope_is_gone_detaches_its_observer
      * a subject that was still there to detach from. */
     lv_obj_delete(inst);
     helix_test_pump(30);
-    ASSERT_OBSERVER_COUNT(&s_shared, 0,
+    ASSERT_OBSERVER_COUNT(s_shared, 0,
                           "the deleted widget left its observer attached - the next notification "
                           "would call into a freed widget");
 
     /* The subject still works with nobody watching. */
-    lv_subject_set_int(&s_shared, 0);
-    TEST_ASSERT_EQUAL_INT32(0, lv_subject_get_int(&s_shared));
+    lv_subject_set_int(s_shared, 0);
+    TEST_ASSERT_EQUAL_INT32(0, lv_subject_get_int(s_shared));
 
-    lv_subject_deinit(&s_shared);
+    lv_subject_delete(s_shared);
 }
 
 /**

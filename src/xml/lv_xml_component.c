@@ -572,18 +572,21 @@ lv_result_t lv_xml_register_component_from_file(const char * path)
  * A `subjects_ll` record holds one of two provenances, and only its `owned`
  * flag tells them apart:
  *
- * OWNED (`<subject>` / `<subject_expr>`): the parser lv_zalloc'd the
- *   lv_subject_t and this record is its only owner, so releasing the record
- *   must deinit and free it. The lv_subject_deinit() is not optional: widgets
- *   created from the component (bind_text / bind_flag_if / bind_style_* /
- *   cond= / subject_expr, all of which register via lv_subject_add_observer*)
- *   keep observers on these subjects. Without the deinit the raw lv_free would
- *   leave those observers dangling, and the widget's later LV_EVENT_DELETE
- *   (e.g. NavigationManager::rebuild_active_views on a HELIX_HOT_RELOAD
- *   re-register, which deletes the old widgets AFTER the component is
- *   unregistered) would lv_observer_delete() a freed subject -> UAF.
- *   lv_subject_deinit only walks subs_ll and removes observers; it does not
- *   touch value/prev_value, so the string buffers are freed separately.
+ * OWNED (`<subject>` / `<subject_expr>`): the parser lv_subject_create()d the
+ *   subject and this record is its only owner, so releasing the record must
+ *   lv_subject_delete() it. The delete, not a bare free, is what makes this
+ *   safe: widgets created from the component (bind_text / bind_flag_if /
+ *   bind_style_* / cond= / subject_expr, all of which register via
+ *   lv_subject_add_observer*) keep observers on these subjects, and
+ *   lv_subject_delete() removes every one of them before it frees the node.
+ *   A widget's later LV_EVENT_DELETE (e.g. NavigationManager::rebuild_active_views
+ *   on a HELIX_HOT_RELOAD re-register, which deletes the old widgets AFTER the
+ *   component is unregistered) then finds no observer to remove instead of
+ *   lv_observer_delete()ing a freed subject. A string subject's two buffers
+ *   are lv_malloc'd by the parser and handed to the subject through
+ *   lv_subject_set_string_buffer_static(), so the subject does not free them.
+ *   Created subjects also sit on LVGL's global subject list, which lv_deinit()
+ *   frees: every scope must be released (lv_xml_deinit()) before lv_deinit().
  *
  * BORROWED (lv_xml_register_subject from application code): the caller owns the
  *   storage -- typically a C++ `static inline lv_subject_t` or a member of a
@@ -612,8 +615,8 @@ void lv_xml_subject_record_release(lv_xml_subject_t * s)
  * The storage half of the rule above, split out for register_subject_impl():
  * re-registering a name keeps the record and its name copy and replaces only
  * the subject, so it needs the ownership walk WITHOUT the name free. The
- * distinction, the deinit-before-free ordering and the string buffers all live
- * here so there is exactly one copy of them.
+ * distinction, the delete and the string buffers all live here so there is
+ * exactly one copy of them.
  *
  * Leaves `s->subject` dangling - every caller either frees the record straight
  * after or overwrites the pointer.
@@ -622,12 +625,17 @@ void lv_xml_subject_record_release_storage(lv_xml_subject_t * s)
 {
     if(s == NULL || !s->owned || s->subject == NULL) return;
 
-    lv_subject_deinit(s->subject);
+    /* The buffer pointers are read first: the subject is gone after the delete,
+     * and observers still see the buffers until it returns. */
+    char * buf = NULL;
+    char * prev_buf = NULL;
     if(s->subject->type == LV_SUBJECT_TYPE_STRING) {
-        lv_free((char *)s->subject->prev_value.pointer);
-        lv_free((char *)s->subject->value.pointer);
+        buf = (char *)s->subject->value.pointer;
+        prev_buf = (char *)s->subject->prev_value.pointer;
     }
-    lv_free(s->subject);
+    lv_subject_delete(s->subject);
+    lv_free(prev_buf);
+    lv_free(buf);
 }
 
 lv_result_t lv_xml_component_unregister(const char * name)
@@ -1220,44 +1228,68 @@ static void process_subject_element(lv_xml_parser_state_t * state, const char * 
         return;
     }
 
-    lv_subject_t * subject = lv_zalloc(sizeof(lv_subject_t));
     const char * min_value_str = lv_xml_get_value_of(attrs, "min_value");
     const char * max_value_str = lv_xml_get_value_of(attrs, "max_value");
 
+    /* Each branch seeds the value before setting min/max, so a declared value
+     * outside the declared range is kept as written rather than clamped. */
+    lv_subject_t * subject = NULL;
     if(lv_streq(type, "int")) {
-        lv_subject_init_int(subject, lv_xml_atoi(value));
+        subject = lv_subject_create(LV_SUBJECT_TYPE_INT);
+        if(subject == NULL) goto oom;
+        lv_subject_set_int(subject, lv_xml_atoi(value));
         if(min_value_str) lv_subject_set_min_value_int(subject, lv_xml_atoi(min_value_str));
         if(max_value_str) lv_subject_set_max_value_int(subject, lv_xml_atoi(max_value_str));
     }
 #if LV_USE_FLOAT
     else if(lv_streq(type, "float")) {
-        lv_subject_init_float(subject, lv_xml_atof(value));
+        subject = lv_subject_create(LV_SUBJECT_TYPE_FLOAT);
+        if(subject == NULL) goto oom;
+        lv_subject_set_float(subject, lv_xml_atof(value));
         if(min_value_str) lv_subject_set_min_value_float(subject, lv_xml_atof(min_value_str));
         if(max_value_str) lv_subject_set_max_value_float(subject, lv_xml_atof(max_value_str));
     }
 #endif
-    else if(lv_streq(type, "color")) lv_subject_init_color(subject, lv_xml_to_color(value));
+    else if(lv_streq(type, "color")) {
+        subject = lv_subject_create(LV_SUBJECT_TYPE_COLOR);
+        if(subject == NULL) goto oom;
+        lv_subject_set_color(subject, lv_xml_to_color(value));
+    }
     else if(lv_streq(type, "string")) {
-        /*Simple solution for now. Will be improved later*/
+        /* Fixed 256-byte buffers, owned by this scope's record and freed in
+         * lv_xml_subject_record_release_storage(). `value` points into the
+         * parser's attribute array, never into these buffers, so it survives
+         * lv_subject_set_string_buffer_static() clearing them. */
         char * buf_prev = lv_malloc(256);
         char * buf_act = lv_malloc(256);
-        lv_subject_init_string(subject, buf_act, buf_prev, 256, value);
+        subject = lv_subject_create(LV_SUBJECT_TYPE_STRING);
+        if(subject == NULL || buf_prev == NULL || buf_act == NULL) {
+            lv_subject_delete(subject);
+            lv_free(buf_prev);
+            lv_free(buf_act);
+            goto oom;
+        }
+        lv_subject_set_string_buffer_static(subject, buf_act, buf_prev, 256);
+        lv_subject_set_string(subject, value);
     }
     else {
-        /* No branch matched, so the lv_zalloc'd subject is still
-         * LV_SUBJECT_TYPE_INVALID: every bind against it would stick at its
-         * default and every lv_subject_set_* would be a silent no-op - exactly
-         * the failure `type=` exists to prevent, reachable through a plain typo
-         * (`type="integer"`). Registering it would hide the mistake for the
-         * lifetime of the app, so warn and register nothing: a missing subject
-         * is diagnosable at the binding site, an invalid one is not. */
+        /* No branch matched: a subject of no known type would make every bind
+         * against it stick at its default and every lv_subject_set_* a silent
+         * no-op - exactly the failure `type=` exists to prevent, reachable
+         * through a plain typo (`type="integer"`). Registering one would hide
+         * the mistake for the lifetime of the app, so warn and register
+         * nothing: a missing subject is diagnosable at the binding site, an
+         * invalid one is not. */
         LV_LOG_WARN("Unknown subject type '%s' for subject '%s'; the subject is NOT registered", type, name);
-        lv_free(subject);
         return;
     }
 
-    /* Parser-allocated: subjects_ll owns `subject` and frees it on scope teardown. */
+    /* Parser-allocated: subjects_ll owns `subject` and deletes it on scope teardown. */
     lv_xml_register_subject_owned(&state->scope, name, subject);
+    return;
+
+oom:
+    LV_LOG_ERROR("OOM: failed to allocate subject '%s'", name);
 }
 
 /**
@@ -1356,15 +1388,15 @@ static void process_subject_expr_element(lv_xml_parser_state_t * state, const ch
         return;
     }
 
-    lv_subject_t * derived = lv_zalloc(sizeof(lv_subject_t));
+    lv_subject_t * derived = lv_subject_create(LV_SUBJECT_TYPE_INT);
     if(derived == NULL) {
         LV_LOG_ERROR("OOM: failed to allocate subject_expr '%s'", name);
         lv_xml_expr_free(expr);
         return;
     }
-    lv_subject_init_int(derived, lv_xml_expr_eval(expr));   /* seed with current value */
+    lv_subject_set_int(derived, lv_xml_expr_eval(expr));   /* seed with current value */
 
-    /* subjects_ll now owns `derived` and frees it on scope teardown, same as
+    /* subjects_ll now owns `derived` and deletes it on scope teardown, same as
      * any <subject>. */
     lv_xml_register_subject_owned(&state->scope, name, derived);
 

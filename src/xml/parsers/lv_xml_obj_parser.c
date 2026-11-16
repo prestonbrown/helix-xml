@@ -1590,6 +1590,7 @@ static bool apply_styles(lv_xml_parser_state_t * state, lv_obj_t * obj, const ch
     else SET_STYLE_IF(text_letter_space, lv_xml_atoi(value));
     else SET_STYLE_IF(text_line_space, lv_xml_atoi(value));
     else SET_STYLE_IF(text_decor, lv_xml_text_decor_to_enum(value));
+    else SET_STYLE_IF(text_leading_trim, lv_xml_text_leading_trim_to_enum(value));
 
     else SET_STYLE_IF(image_opa, lv_xml_to_opa(value));
     else SET_STYLE_IF(image_recolor, lv_xml_to_color(value));

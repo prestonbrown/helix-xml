@@ -1620,6 +1620,47 @@ static void test_transform_pivot_percent_and_plain_values_both_parse_as_inline_a
 }
 
 /*---------------------------------------------------------------------------
+ * text_leading_trim
+ *
+ * An enum property with one dispatch line in each of the two sites, the
+ * `<style>` parser and the inline `style_*` attributes in the obj parser.
+ *--------------------------------------------------------------------------*/
+
+static void test_text_leading_trim_parses_in_a_style(void)
+{
+    ASSERT_XML_REGISTERS("style_trim",
+                         "<component>"
+                         "  <styles>"
+                         "    <style name=\"trim\" text_leading_trim=\"capital_baseline\"/>"
+                         "  </styles>"
+                         "  <view extends=\"lv_obj\" name=\"trim_root\"/>"
+                         "</component>");
+
+    lv_xml_component_scope_t * scope = lv_xml_component_get_scope("style_trim");
+    lv_xml_style_t * trim = lv_xml_get_style_by_name(scope, "trim");
+    TEST_ASSERT_NOT_NULL(trim);
+
+    TEST_ASSERT_EQUAL_INT32(LV_TEXT_LEADING_TRIM_CAPITAL_BASELINE,
+                            style_prop_num(trim, LV_STYLE_TEXT_LEADING_TRIM));
+}
+
+static void test_text_leading_trim_parses_as_an_inline_attribute(void)
+{
+    ASSERT_XML_REGISTERS("obj_trim",
+                         "<component>"
+                         "  <view extends=\"lv_obj\" name=\"obj_trim_root\">"
+                         "    <lv_label name=\"trimmed\" text=\"x\" style_text_leading_trim=\"lower\"/>"
+                         "  </view>"
+                         "</component>");
+
+    lv_obj_t * root = XML_CREATE(helix_test_env_screen(), "obj_trim", NULL);
+    helix_test_pump(30);
+
+    lv_obj_t * trimmed = ASSERT_NAMED(root, "trimmed");
+    ASSERT_STYLE_INT(trimmed, LV_STYLE_TEXT_LEADING_TRIM, LV_PART_MAIN, LV_TEXT_LEADING_TRIM_LOWER);
+}
+
+/*---------------------------------------------------------------------------
  * transition_props/transition_duration/transition_easing/transition_delay
  *--------------------------------------------------------------------------*/
 
@@ -2241,6 +2282,9 @@ int main(void)
 
     RUN_TEST(test_transform_pivot_percent_and_plain_values_both_parse_in_a_style);
     RUN_TEST(test_transform_pivot_percent_and_plain_values_both_parse_as_inline_attributes);
+
+    RUN_TEST(test_text_leading_trim_parses_in_a_style);
+    RUN_TEST(test_text_leading_trim_parses_as_an_inline_attribute);
 
     RUN_TEST(test_longhand_transition_builds_a_descriptor_on_the_style);
     RUN_TEST(test_a_non_interpolatable_transition_prop_is_rejected_by_name);

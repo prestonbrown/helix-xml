@@ -433,6 +433,11 @@ lv_result_t lv_xml_register_style(lv_xml_component_scope_t * scope, const char *
         style_transition_install(xml_style, props_str, duration, delay, easing, style_name);
     }
 
+    /* An extended style can already be on widgets, and with LV_OBJ_STYLE_CACHE each
+     * of them caches which properties its styles hold: a property this call added
+     * reads as its default until the widgets are told. A new style is on none. */
+    if(found) lv_obj_report_style_change(style);
+
     return LV_RESULT_OK;
 }
 

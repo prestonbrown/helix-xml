@@ -9,6 +9,7 @@
 
 #include <string.h>
 
+#include "helpers/helix_log_capture.h"
 #include "helpers/helix_test_env.h"
 #include "helpers/helix_test_subject.h"
 #include "helpers/helix_test_pump.h"
@@ -65,13 +66,16 @@ static void test_new_options_keep_a_selection_that_still_fits(void)
     TEST_ASSERT_EQUAL(0, lv_dropdown_get_selected(dd));
 }
 
-static void test_an_empty_bind_options_is_no_binding(void)
+static void test_an_empty_bind_options_or_bind_value_is_no_binding(void)
 {
+    log_capture_start();
     ASSERT_XML_REGISTERS("dd_opts_empty",
-                         "<component><view name=\"r\"><lv_dropdown name=\"dd\" options=\"K\" bind_options=\"\"/>"
+                         "<component><view name=\"r\"><lv_dropdown name=\"dd\" options=\"K\" bind_options=\"\" bind_value=\"\"/>"
                          "</view></component>");
     lv_obj_t * dd = ASSERT_NAMED(XML_CREATE(helix_test_env_screen(), "dd_opts_empty", NULL), "dd");
+    log_capture_stop();
     TEST_ASSERT_EQUAL_STRING("K", lv_dropdown_get_options(dd));
+    TEST_ASSERT_FALSE_MESSAGE(log_contains("doesn't exist"), g_log_buf);
 }
 
 int main(void)
@@ -79,6 +83,6 @@ int main(void)
     UNITY_BEGIN();
     RUN_TEST(test_bind_options_fills_and_follows_the_subject);
     RUN_TEST(test_new_options_keep_a_selection_that_still_fits);
-    RUN_TEST(test_an_empty_bind_options_is_no_binding);
+    RUN_TEST(test_an_empty_bind_options_or_bind_value_is_no_binding);
     return UNITY_END();
 }

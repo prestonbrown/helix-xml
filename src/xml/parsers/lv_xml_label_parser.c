@@ -66,6 +66,10 @@ void lv_xml_label_apply(lv_xml_parser_state_t * state, const char ** attrs)
 
         if(lv_streq("text", name)) lv_label_set_text(item, value);
         else if(lv_streq("long_mode", name)) lv_label_set_long_mode(item, long_mode_text_to_enum_value(value));
+#ifdef LV_LABEL_WRAP_AT_SPACES
+        /*Present only on an LVGL that carries lv_label_set_wrap_at_spaces()*/
+        else if(lv_streq("wrap_at_spaces", name)) lv_label_set_wrap_at_spaces(item, lv_xml_to_bool(value));
+#endif
 #if LV_USE_TRANSLATION
         else if(lv_streq("translation_tag", name)) {
             /*A component's unset translation_tag prop arrives as ""*/

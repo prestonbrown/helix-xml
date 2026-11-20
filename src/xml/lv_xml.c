@@ -2556,6 +2556,17 @@ static void view_start_element_handler(void * user_data, const char * name, cons
     state->item = NULL;
     /* Select the widget specific parser type based on the name */
     lv_widget_processor_t * p = lv_xml_widget_get_processor(name);
+
+    /* An object-creating child of a component instance goes into the instance's
+     * default slot. Elements - processors registered as `<widget>-<element>`,
+     * which is how `bind_*`, `event_cb` and `style` resolve - act on the instance
+     * itself and are never moved. A view root is placed by whoever creates the
+     * component, which has already routed it. */
+    if(!is_view) {
+        bool creates_object = p ? lv_strchr(p->name, '-') == NULL : lv_xml_component_get_scope(name) != NULL;
+        if(creates_object) state->parent = lv_xml_component_route_child(state->parent);
+    }
+
     if(p) {
         state->item = p->create_cb(state, attrs);
         if(state->item) {
@@ -2587,6 +2598,7 @@ static void view_start_element_handler(void * user_data, const char * name, cons
     }
 
     /* If not a component either, check if it is a slot, e.g. my_button-icon */
+    bool is_slot_tag = false;
     if(state->item == NULL) {
         char buf[128];
         if(lv_strlen(name) >= sizeof(buf)) {
@@ -2599,7 +2611,25 @@ static void view_start_element_handler(void * user_data, const char * name, cons
             const char * slot_name = bufp;
             lv_xml_component_scope_t * comp_scope = lv_xml_component_get_scope(comp_name);
             if(comp_scope && lv_streq(comp_name, comp_scope->name)) {
-                state->item = lv_obj_find_by_name(state->parent, slot_name);
+                is_slot_tag = true;
+                bool declared = false;
+                state->item = lv_xml_component_fill_slot(state->parent, slot_name, &declared);
+                if(state->item == NULL && !declared) {
+                    /* Not a declared slot: fill the object of that name, which
+                     * is all this form meant before slots were declared. */
+                    state->item = lv_obj_find_by_name(state->parent, slot_name);
+                    if(state->item) {
+                        LV_LOG_WARN("'%s' does not declare a slot '%s'; filling its object of that name. "
+                                    "Declare it with <slot name=\"%s\"/> in <api>.",
+                                    comp_name, slot_name, slot_name);
+                    }
+                }
+                if(state->item == NULL) {
+                    LV_LOG_ERROR("<%s>: component '%s' has no slot '%s'%s. Its children are attached to "
+                                 "the enclosing parent instead.",
+                                 name, comp_name, slot_name,
+                                 declared ? " (declared, but its target object is missing)" : "");
+                }
             }
         }
     }
@@ -2620,7 +2650,7 @@ static void view_start_element_handler(void * user_data, const char * name, cons
      * missing widget is a wrapper, and its contents are still valid widgets the
      * layout expects to see. */
     if(state->item == NULL) {
-        LV_LOG_ERROR("XML tag '%s' is not a known widget/element/component/slot — "
+        if(!is_slot_tag) LV_LOG_ERROR("XML tag '%s' is not a known widget/element/component/slot — "
                      "likely an unregistered widget in a STALE BINARY (rebuild required). "
                      "Its children are attached to the enclosing parent instead.",
                      name);

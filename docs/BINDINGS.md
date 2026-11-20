@@ -246,6 +246,63 @@ reasserted** — it is not two-way, so it will not fight a later flag change the
 way two subject binds fight each other. Covered by `test_prop_conditionals.c`
 (`test_a_prop_pipe_hide_is_decided_once_and_never_reasserted`).
 
+## Slots — where an instance's children go
+
+A component declares slots in its `<api>`. Each names an object in its view
+that hosts content supplied by whoever instantiates it:
+
+```xml
+<component>
+  <api>
+    <slot name="body" default="true"/>
+    <slot name="footer" target="footer_row"/>
+  </api>
+  <view>
+    <lv_label name="title" text="Title"/>
+    <lv_obj name="body"><lv_label text="Nothing here"/></lv_obj>
+    <lv_obj name="footer_row"/>
+  </view>
+</component>
+```
+
+`target` names the host object and defaults to the slot's own name. At most
+one slot is `default`.
+
+Filling them:
+
+```xml
+<card>
+  <lv_label text="Goes into body"/>
+  <card-footer><lv_button/></card-footer>
+  <bind_flag_if_eq subject="hide_card" flag="hidden" ref_value="1"/>
+</card>
+```
+
+- **Object children go to the default slot.** Anything that creates an object
+  (a widget, a component, the expansion of a `<repeat>` or `<if>`) lands in the
+  default slot's host. With no default slot they land on the instance root, as
+  they always did.
+- **Elements stay on the instance.** `bind_*`, `event_cb`, `style` and the other
+  `<widget>-<element>` processors act on the instance root wherever they sit.
+- **`<component-slot>` fills a named slot.** Its children go to that slot's host.
+- **Default content.** Whatever the view puts in a host shows until the slot
+  receives content, and is removed then.
+- **`extends`.** A component whose view extends a slotted component fills the
+  extended component's slots with its own view, and its instances inherit them
+  unless it declares slots of its own.
+
+Hosts are resolved once, when the instance is built and before any caller
+content exists, so a target can only match the component's own object.
+
+Host code reaches a slot with `lv_xml_component_get_slot(instance, "footer")`
+(`NULL` for the default slot). It returns `NULL` for an object that is not an
+instance of a component declaring that slot. Content added through it does not
+remove default content.
+
+A `<component-name>` tag for a name the component does not declare still fills
+the view object of that name, with a warning to declare it; a name matching
+nothing is reported as a missing slot. Covered by `test_slots.c`.
+
 ## Styles across parts
 
 `parts="main,indicator,knob"` applies one style binding to several widget parts

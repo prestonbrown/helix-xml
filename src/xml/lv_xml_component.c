@@ -133,6 +133,7 @@ void lv_xml_component_scope_init(lv_xml_component_scope_t * scope)
     lv_ll_init(&scope->frag_ll, sizeof(xml_frag_record_t));
     lv_ll_init(&scope->instance_ll, sizeof(lv_xml_scope_instance_t));
     lv_ll_init(&scope->event_ll, sizeof(lv_xml_event_cb_t));
+    lv_ll_init(&scope->slot_ll, sizeof(lv_xml_slot_t));
     lv_ll_init(&scope->image_ll, sizeof(lv_xml_image_t));
     lv_ll_init(&scope->font_ll, sizeof(lv_xml_font_t));
     lv_ll_init(&scope->timeline_ll, sizeof(lv_xml_timeline_t));
@@ -178,7 +179,106 @@ void lv_xml_component_scope_instance_attach(lv_xml_component_scope_t * scope, lv
 
     inst->root = view_root;
     inst->scope = scope;
+    inst->slot_hosts = NULL;
+    inst->slot_filled = 0;
     scope->instance_cnt++;
+
+    if(scope->slot_cnt == 0) return;
+    inst->slot_hosts = lv_malloc_zeroed(sizeof(lv_obj_t *) * scope->slot_cnt);
+    if(inst->slot_hosts == NULL) {
+        LV_LOG_ERROR("OOM: no slot hosts for an instance of '%s'; its children stay on the root",
+                     scope->name ? scope->name : "?");
+        return;
+    }
+    uint32_t i = 0;
+    lv_xml_slot_t * slot;
+    LV_LL_READ(&scope->slot_ll, slot) {
+        const char * target = slot->target ? slot->target : slot->name;
+        lv_obj_t * host = NULL;
+#if LV_USE_OBJ_NAME
+        const char * root_name = lv_obj_get_name(view_root);
+        if(root_name && lv_streq(root_name, target)) host = view_root;
+        else host = lv_obj_find_by_name(view_root, target);
+#endif
+        if(host == NULL) {
+            LV_LOG_WARN("Component '%s' declares slot '%s', but its view has no object named '%s'",
+                        scope->name ? scope->name : "?", slot->name, target);
+        }
+        inst->slot_hosts[i++] = host;
+    }
+}
+
+/** The instance record on `obj` that routes its children: the most recently
+ *  attached one whose scope declares slots. An object can carry several - a
+ *  component that `extends` another is one view root with both scopes'
+ *  records, the extended one attached first - so the newest wins, and an
+ *  extender that declares no slots of its own passes the extended ones on. */
+static lv_xml_scope_instance_t * slotted_instance_of(lv_obj_t * obj)
+{
+    if(obj == NULL) return NULL;
+    uint32_t n = lv_obj_get_event_count(obj);
+    for(uint32_t i = n; i > 0; i--) {
+        lv_event_dsc_t * dsc = lv_obj_get_event_dsc(obj, i - 1);
+        if(dsc == NULL || lv_event_dsc_get_cb(dsc) != scope_instance_delete_cb) continue;
+        lv_xml_scope_instance_t * inst = lv_event_dsc_get_user_data(dsc);
+        if(inst && inst->slot_hosts) return inst;
+    }
+    return NULL;
+}
+
+/** Index of the slot `name` in `scope`, or of its default slot when `name` is
+ *  NULL; -1 when there is none. */
+static int32_t slot_index(const lv_xml_component_scope_t * scope, const char * name)
+{
+    int32_t i = 0;
+    lv_xml_slot_t * slot;
+    LV_LL_READ(&scope->slot_ll, slot) {
+        if(name ? lv_streq(slot->name, name) : slot->is_default) return i;
+        i++;
+    }
+    return -1;
+}
+
+/** The host for slot `index`, emptied of its default content the first time
+ *  something is placed in it. */
+static lv_obj_t * take_slot(lv_xml_scope_instance_t * inst, int32_t index)
+{
+    lv_obj_t * host = inst->slot_hosts[index];
+    if(host == NULL) return NULL;
+    if(index < 32 && !(inst->slot_filled & (1u << index))) {
+        inst->slot_filled |= 1u << index;
+        lv_obj_clean(host);
+    }
+    return host;
+}
+
+lv_obj_t * lv_xml_component_route_child(lv_obj_t * parent)
+{
+    lv_xml_scope_instance_t * inst = slotted_instance_of(parent);
+    if(inst == NULL) return parent;
+    int32_t index = slot_index(inst->scope, NULL);
+    if(index < 0) return parent;
+    lv_obj_t * host = take_slot(inst, index);
+    return host ? host : parent;
+}
+
+lv_obj_t * lv_xml_component_fill_slot(lv_obj_t * parent, const char * slot_name, bool * declared)
+{
+    *declared = false;
+    lv_xml_scope_instance_t * inst = slotted_instance_of(parent);
+    if(inst == NULL) return NULL;
+    int32_t index = slot_index(inst->scope, slot_name);
+    if(index < 0) return NULL;
+    *declared = true;
+    return take_slot(inst, index);
+}
+
+lv_obj_t * lv_xml_component_get_slot(lv_obj_t * obj, const char * slot_name)
+{
+    lv_xml_scope_instance_t * inst = slotted_instance_of(obj);
+    if(inst == NULL) return NULL;
+    int32_t index = slot_index(inst->scope, slot_name);
+    return index < 0 ? NULL : inst->slot_hosts[index];
 }
 
 
@@ -868,6 +968,7 @@ static void scope_instance_delete_cb(lv_event_t * e)
     lv_xml_component_scope_t * scope = inst->scope;
 
     lv_ll_remove(&scope->instance_ll, inst);
+    lv_free(inst->slot_hosts);
     lv_free(inst);                       /*the record IS the ll node (see lv_ll_ins_head)*/
 
     if(scope->instance_cnt > 0) scope->instance_cnt--;
@@ -943,6 +1044,7 @@ static void component_scope_free(lv_xml_component_scope_t * scope)
     lv_xml_scope_instance_t * inst;
     LV_LL_READ(&scope->instance_ll, inst) {
         if(inst->root) lv_obj_remove_event_cb_with_user_data(inst->root, scope_instance_delete_cb, inst);
+        lv_free(inst->slot_hosts);
     }
     lv_ll_clear(&scope->instance_ll);
 
@@ -965,6 +1067,14 @@ static void component_scope_free(lv_xml_component_scope_t * scope)
         lv_free((char *)param->type);
     }
     lv_ll_clear(&scope->param_ll);
+
+    lv_xml_slot_t * slot;
+    LV_LL_READ(&scope->slot_ll, slot) {
+        lv_free((char *)slot->name);
+        lv_free((char *)slot->target);
+    }
+    lv_ll_clear(&scope->slot_ll);
+    scope->slot_cnt = 0;
 
     lv_xml_font_t * font;
     LV_LL_READ(&scope->font_ll, font) {
@@ -1805,8 +1915,47 @@ static void process_grad_stop_element(lv_xml_parser_state_t * state, const char 
     dsc->stops_count++;
 }
 
+static void process_slot_element(lv_xml_parser_state_t * state, const char ** attrs)
+{
+    const char * slot_name = lv_xml_get_value_of(attrs, "name");
+    if(slot_name == NULL || slot_name[0] == '\0') {
+        LV_LOG_WARN("<slot> in '%s' has no name; ignored", state->scope.name ? state->scope.name : "?");
+        return;
+    }
+    const char * default_str = lv_xml_get_value_of(attrs, "default");
+    bool is_default = default_str != NULL && lv_xml_to_bool(default_str);
+    lv_xml_slot_t * other;
+    LV_LL_READ(&state->scope.slot_ll, other) {
+        if(lv_streq(other->name, slot_name)) {
+            LV_LOG_WARN("'%s' declares slot '%s' twice; the first one is used",
+                        state->scope.name ? state->scope.name : "?", slot_name);
+            return;
+        }
+        if(is_default && other->is_default) {
+            LV_LOG_WARN("'%s' declares a second default slot '%s'; '%s' stays the default",
+                        state->scope.name ? state->scope.name : "?", slot_name, other->name);
+            is_default = false;
+        }
+    }
+
+    lv_xml_slot_t * slot = lv_ll_ins_tail(&state->scope.slot_ll);
+    if(slot == NULL) {
+        LV_LOG_ERROR("OOM: failed to allocate slot");
+        return;
+    }
+    slot->name = lv_strdup(slot_name);
+    const char * target = lv_xml_get_value_of(attrs, "target");
+    slot->target = target ? lv_strdup(target) : NULL;
+    slot->is_default = is_default;
+    state->scope.slot_cnt++;
+}
+
 static void process_prop_element(lv_xml_parser_state_t * state, const char * name, const char ** attrs)
 {
+    if(lv_streq(name, "slot")) {
+        process_slot_element(state, attrs);
+        return;
+    }
     if(!lv_streq(name, "prop")) return;
 
     lv_xml_param_t * prop = lv_ll_ins_tail(&state->scope.param_ll);

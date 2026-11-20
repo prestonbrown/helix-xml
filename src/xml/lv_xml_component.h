@@ -63,6 +63,19 @@ lv_result_t lv_xml_register_component_from_file(const char * path);
 lv_xml_component_scope_t * lv_xml_component_get_scope(const char * component_name);
 
 /**
+ * The object hosting slot `slot_name` of a component instance, for host code
+ * that fills a slot at runtime. NULL `slot_name` names the default slot.
+ * Returns NULL when `obj` is not an instance of a component declaring that
+ * slot, or the slot's target was not found when the instance was built.
+ * Content added through this pointer does not remove the slot's default
+ * content; clean the host first if that is wanted.
+ * @param obj        the instance's root object
+ * @param slot_name  a name from the component's `<slot>` declarations, or NULL
+ * @return the host object, or NULL
+ */
+lv_obj_t * lv_xml_component_get_slot(lv_obj_t * obj, const char * slot_name);
+
+/**
  * Get the scope of a registered Component without offering an unregistered name
  * to the component loader. For callers that must not load: teardown, and code
  * asking whether a component is registered yet.

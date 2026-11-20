@@ -108,6 +108,11 @@ struct _lv_xml_component_scope_t {
      *  one held scope per re-registration of a file that lends styles. */
     uint32_t styles_borrowed : 1;
     struct _lv_xml_component_scope_t * next;
+    /* Appended, never inserted: app code reads fields of this struct and the
+     * header sits on an -isystem path, so an object built against an older
+     * layout is not always rebuilt. New fields go after this line. */
+    lv_ll_t slot_ll;           /**< lv_xml_slot_t, declaration order */
+    uint32_t slot_cnt;
 };
 
 /**
@@ -120,7 +125,23 @@ struct _lv_xml_component_scope_t {
 typedef struct {
     lv_obj_t * root;                     /**< the instance's view root */
     lv_xml_component_scope_t * scope;    /**< the scope that built it (owns this node) */
+    /** One host per entry of `scope->slot_ll`, in declaration order, resolved
+     *  when the instance is attached: the view is complete then and no caller
+     *  content exists yet, so a target name can only match the component's own
+     *  object. NULL when the scope declares no slots, or for a slot whose
+     *  target was not found. Freed with the record. */
+    lv_obj_t ** slot_hosts;
+    /** Bit i set once slot i has received content; its default content is
+     *  removed on that first fill. Slots past the 32nd are never cleared. */
+    uint32_t slot_filled;
 } lv_xml_scope_instance_t;
+
+/** A `<slot>` declared in a component's `<api>`. */
+typedef struct {
+    const char * name;      /**< the slot's public name: `<comp-name>`, lv_xml_component_get_slot() */
+    const char * target;    /**< name of the view object that hosts it; NULL means `name` */
+    bool is_default;        /**< receives the instance's plain object children */
+} lv_xml_slot_t;
 
 typedef struct {
     const char * name;
@@ -262,6 +283,21 @@ void lv_xml_component_scope_init(lv_xml_component_scope_t * scope);
  * @param view_root  the instance's view root; may be NULL
  */
 void lv_xml_component_scope_instance_attach(lv_xml_component_scope_t * scope, lv_obj_t * view_root);
+
+/**
+ * Where an object-creating child of `parent` goes while a view is parsed: the
+ * default slot's host when `parent` is a component instance that declares one,
+ * otherwise `parent`. The slot's default content is removed on the first child.
+ */
+lv_obj_t * lv_xml_component_route_child(lv_obj_t * parent);
+
+/**
+ * The host of slot `slot_name` on the instance `parent`, for a `<comp-slot>`
+ * tag. `*declared` reports whether the instance declares that slot at all, so
+ * the caller can tell an undeclared name from a declared slot whose target is
+ * missing. Removes the slot's default content.
+ */
+lv_obj_t * lv_xml_component_fill_slot(lv_obj_t * parent, const char * slot_name, bool * declared);
 
 /**
  * Detach the observer and free the retained body/snapshots of a subject-bound

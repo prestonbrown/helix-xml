@@ -58,6 +58,17 @@ void * lv_xml_dropdown_create(lv_xml_parser_state_t * state, const char ** attrs
 }
 
 
+/** New options keep the current selection when it still names a row: setting
+ *  options resets a dropdown to its first row, which would silently change a
+ *  bind_value subject every time the list is refreshed. */
+static void dropdown_options_observer_cb(lv_observer_t * observer, lv_subject_t * subject)
+{
+    lv_obj_t * dd = lv_observer_get_target_obj(observer);
+    uint32_t sel = lv_dropdown_get_selected(dd);
+    lv_dropdown_set_options(dd, lv_subject_get_string(subject));
+    if(sel < lv_dropdown_get_option_count(dd)) lv_dropdown_set_selected(dd, sel);
+}
+
 void lv_xml_dropdown_apply(lv_xml_parser_state_t * state, const char ** attrs)
 {
     void * item = lv_xml_state_get_item(state);
@@ -97,6 +108,19 @@ void lv_xml_dropdown_apply(lv_xml_parser_state_t * state, const char ** attrs)
             }
             else {
                 LV_LOG_WARN("Subject \"%s\" doesn't exist in dropdown bind_selected", value);
+            }
+        }
+        /* Options from a string subject, one per line, kept current: the list
+         * a dropdown offers is often data (discovered devices, macros) while
+         * the widget is markup. An empty subject name is no binding. */
+        else if(lv_streq("bind_options", name)) {
+            if(value[0] == '\0') continue;
+            lv_subject_t * subject = lv_xml_get_subject(&state->scope, value);
+            if(subject && subject->type == LV_SUBJECT_TYPE_STRING) {
+                lv_subject_add_observer_obj(subject, dropdown_options_observer_cb, item, NULL);
+            }
+            else {
+                LV_LOG_WARN("String subject \"%s\" doesn't exist in dropdown bind_options", value);
             }
         }
 #if LV_USE_TRANSLATION

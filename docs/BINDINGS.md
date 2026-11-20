@@ -115,6 +115,19 @@ condition that needs one is one expression:
 
 Pinned by `test_bind_compose.c`, which drives every pair in both notify orders.
 
+## Dropdown bindings
+
+| Attribute | Direction |
+|---|---|
+| `bind_value="int_subject"` | two-way: the selection and the subject follow each other |
+| `bind_selected="int_subject"` | one-way: the subject drives the selection |
+| `bind_options="string_subject"` | one-way: the subject's text, one option per line, is the list |
+
+A new option list keeps the current selection when it still names a row, so
+refreshing the list does not move a `bind_value` subject. An empty subject
+name on `bind_selected` or `bind_options` means no binding. Covered by
+`test_dropdown_binds.c`.
+
 ## The expression language
 
 Available to every `cond=` and to `<subject_expr>`.

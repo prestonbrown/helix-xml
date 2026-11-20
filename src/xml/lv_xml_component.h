@@ -76,6 +76,29 @@ lv_xml_component_scope_t * lv_xml_component_get_scope(const char * component_nam
 lv_obj_t * lv_xml_component_get_slot(lv_obj_t * obj, const char * slot_name);
 
 /**
+ * Where a widget's XML children go: called once for each object-creating child
+ * (a widget, a component, an object a `<repeat>` or `<if>` expands to) parsed
+ * under the widget, it returns the object that child is created on.
+ * @param obj        the widget the child was written under
+ * @param user_data  the value given to lv_xml_set_child_host()
+ * @return the child's parent, or NULL to keep it on `obj`
+ */
+typedef lv_obj_t * (*lv_xml_child_host_cb_t)(lv_obj_t * obj, void * user_data);
+
+/**
+ * Let a widget written in C++ name the object its XML children go to, the way
+ * a component's default `<slot>` does. Element children (`bind_*`, `event_cb`,
+ * `style`) still act on `obj`. Only children parsed under `obj` are routed:
+ * lv_xml_create(obj, ...) and lv_obj_create(obj) are not. Call it from the
+ * widget's create_cb; a second call replaces the first. The registration is
+ * freed with `obj`.
+ * @param obj        the widget
+ * @param cb         returns each child's parent; NULL removes the registration
+ * @param user_data  passed to `cb`
+ */
+void lv_xml_set_child_host(lv_obj_t * obj, lv_xml_child_host_cb_t cb, void * user_data);
+
+/**
  * Get the scope of a registered Component without offering an unregistered name
  * to the component loader. For callers that must not load: teardown, and code
  * asking whether a component is registered yet.

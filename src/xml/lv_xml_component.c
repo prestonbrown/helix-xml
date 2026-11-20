@@ -60,6 +60,13 @@ static bool scope_styles_are_live(lv_xml_component_scope_t * scope);
 static void component_scope_free(lv_xml_component_scope_t * scope);
 static void component_scope_drop_others(const char * name, const lv_xml_component_scope_t * keep);
 static void scope_instance_delete_cb(lv_event_t * e);
+/** A widget's lv_xml_set_child_host() registration, carried on it as the
+ *  user data of its LV_EVENT_DELETE callback. */
+typedef struct child_host_t {
+    lv_xml_child_host_cb_t cb;
+    void * user_data;
+} child_host_t;
+static child_host_t * child_host_of(lv_obj_t * obj);
 static void scope_free_async_cb(void * scope_v);
 static void subject_expr_record_release(lv_xml_subject_expr_t * record);
 static void scope_retime_transitions(lv_ll_t * list);
@@ -292,20 +299,31 @@ static lv_obj_t * take_slot(lv_xml_scope_instance_t * inst, int32_t index)
     if(host == NULL) return NULL;
     if(index < 32 && !(inst->slot_filled & (1u << index))) {
         inst->slot_filled |= 1u << index;
-        lv_obj_clean(host);
+        /*A widget that names its children's host built its own objects; they
+         *are its structure, not the slot's default content.*/
+        if(child_host_of(host) == NULL) lv_obj_clean(host);
         if(slot_at(inst->scope, index)->hide_empty) lv_obj_remove_flag(host, LV_OBJ_FLAG_HIDDEN);
     }
     return host;
 }
 
+/** `parent`, or the object its child-host registration names for a new child. */
+static lv_obj_t * route_to_child_host(lv_obj_t * parent)
+{
+    child_host_t * rec = child_host_of(parent);
+    if(rec == NULL) return parent;
+    lv_obj_t * host = rec->cb(parent, rec->user_data);
+    return host ? host : parent;
+}
+
 lv_obj_t * lv_xml_component_route_child(lv_obj_t * parent, const char * parsing_scope)
 {
     lv_xml_scope_instance_t * inst = slotted_instance_of(parent, parsing_scope);
-    if(inst == NULL) return parent;
+    if(inst == NULL) return route_to_child_host(parent);
     int32_t index = slot_index(inst->scope, NULL);
-    if(index < 0) return parent;
+    if(index < 0) return route_to_child_host(parent);
     lv_obj_t * host = take_slot(inst, index);
-    return host ? host : parent;
+    return route_to_child_host(host ? host : parent);
 }
 
 lv_obj_t * lv_xml_component_fill_slot(lv_obj_t * parent, const char * slot_name,
@@ -318,6 +336,47 @@ lv_obj_t * lv_xml_component_fill_slot(lv_obj_t * parent, const char * slot_name,
     if(index < 0) return NULL;
     *declared = true;
     return take_slot(inst, index);
+}
+
+static void child_host_delete_cb(lv_event_t * e)
+{
+    lv_free(lv_event_get_user_data(e));
+}
+
+/** The child-host registration on `obj`, or NULL. */
+static child_host_t * child_host_of(lv_obj_t * obj)
+{
+    uint32_t n = lv_obj_get_event_count(obj);
+    for(uint32_t i = 0; i < n; i++) {
+        lv_event_dsc_t * dsc = lv_obj_get_event_dsc(obj, i);
+        if(dsc && lv_event_dsc_get_cb(dsc) == child_host_delete_cb) return lv_event_dsc_get_user_data(dsc);
+    }
+    return NULL;
+}
+
+void lv_xml_set_child_host(lv_obj_t * obj, lv_xml_child_host_cb_t cb, void * user_data)
+{
+    if(obj == NULL) return;
+    child_host_t * rec = child_host_of(obj);
+    if(cb == NULL) {
+        if(rec) lv_obj_remove_event_cb_with_user_data(obj, child_host_delete_cb, rec);
+        lv_free(rec);
+        return;
+    }
+    if(rec == NULL) {
+        rec = lv_malloc(sizeof(child_host_t));
+        if(rec == NULL) {
+            LV_LOG_ERROR("OOM: no child host for a widget; its XML children stay on it");
+            return;
+        }
+        if(lv_obj_add_event_cb(obj, child_host_delete_cb, LV_EVENT_DELETE, rec) == NULL) {
+            lv_free(rec);
+            LV_LOG_ERROR("OOM: no child host for a widget; its XML children stay on it");
+            return;
+        }
+    }
+    rec->cb = cb;
+    rec->user_data = user_data;
 }
 
 lv_obj_t * lv_xml_component_get_slot(lv_obj_t * obj, const char * slot_name)

@@ -324,6 +324,38 @@ A `<component-name>` tag for a name the component does not declare still fills
 the view object of that name, with a warning to declare it; a name matching
 nothing is reported as a missing slot. Covered by `test_slots.c`.
 
+### Widgets written in C++
+
+A widget registered with `lv_xml_register_widget()` has no `<api>` to declare a
+slot in. Its create_cb names where its XML children go instead:
+
+```c
+static lv_obj_t * pager_child_host(lv_obj_t * pager, void * strip)
+{
+    lv_obj_t * tile = lv_obj_create(strip);   /* one tile per page */
+    return tile;
+}
+
+static void * pager_create(lv_xml_parser_state_t * state, const char ** attrs)
+{
+    lv_obj_t * pager = lv_obj_create(lv_xml_state_get_parent(state));
+    lv_obj_t * strip = lv_obj_create(pager);
+    lv_xml_set_child_host(pager, pager_child_host, strip);
+    return pager;
+}
+```
+
+The callback runs once per object child, before the child is created, and
+returns its parent; NULL keeps the child on the widget. It can return one fixed
+object, or build a fresh one each time as above. Elements still act on the
+widget, and grandchildren stay with their own parent. A slot whose target is
+such a widget passes its content on through the callback, and filling it leaves
+the widget's own objects in place. Only children the parser creates are routed:
+`lv_xml_create(widget, ...)` and `lv_obj_create(widget)` from C++ are not. An
+`<if>` or `<repeat>` that rebuilds calls the callback again for its new objects
+and leaves whatever the callback built for the old ones. `ui_carousel` uses this
+for its pages.
+
 ## Styles across parts
 
 `parts="main,indicator,knob"` applies one style binding to several widget parts

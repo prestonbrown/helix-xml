@@ -17,6 +17,10 @@
 #include "helpers/helix_test_pump.h"
 #include "helpers/xml_assert.h"
 
+#include "xml/lv_xml_parser.h"
+#include "xml/lv_xml_widget.h"
+#include "xml/parsers/lv_xml_obj_parser.h"
+
 void setUp(void)
 {
     helix_test_env_setup();
@@ -349,6 +353,129 @@ static void test_a_slot_hosted_inside_another_slot_is_refused(void)
     TEST_ASSERT_TRUE_MESSAGE(log_contains("inside slot 'outer'"), g_log_buf);
 }
 
+/*---------------------------------------------------------------------------
+ * Host widgets: a C++ widget names where its XML children go
+ *--------------------------------------------------------------------------*/
+
+/* A pager: an outer object holding a strip, where each XML child gets a
+ * wrapper of its own, as a carousel gives each page a tile. */
+static uint32_t g_host_calls;
+static bool g_host_refuses;
+
+static lv_obj_t * pager_host_cb(lv_obj_t * pager, void * user_data)
+{
+    g_host_calls++;
+    if(g_host_refuses) return NULL;
+    lv_obj_t * strip = user_data;
+    TEST_ASSERT_EQUAL_PTR(strip, lv_obj_get_child(pager, 0));
+    lv_obj_t * wrap = lv_obj_create(strip);
+    lv_obj_set_name(wrap, "wrap_#");
+    return wrap;
+}
+
+static void * pager_create(lv_xml_parser_state_t * state, const char ** attrs)
+{
+    LV_UNUSED(attrs);
+    lv_obj_t * pager = lv_obj_create(lv_xml_state_get_parent(state));
+    lv_obj_t * strip = lv_obj_create(pager);
+    lv_obj_set_name(strip, "strip");
+    lv_xml_set_child_host(pager, pager_host_cb, strip);
+    return pager;
+}
+
+static void register_pager(void)
+{
+    g_host_calls = 0;
+    g_host_refuses = false;
+    TEST_ASSERT_EQUAL(LV_RESULT_OK, lv_xml_register_widget("test_pager", pager_create, lv_xml_obj_apply));
+}
+
+static lv_obj_t * pager_with(const char * children_xml)
+{
+    static char buf[2048];
+    lv_snprintf(buf, sizeof(buf),
+                "<component><view name=\"host\">"
+                "<test_pager name=\"pager\">%s</test_pager>"
+                "</view></component>",
+                children_xml);
+    ASSERT_XML_REGISTERS("pager_host", buf);
+    lv_obj_t * view = XML_CREATE(helix_test_env_screen(), "pager_host", NULL);
+    return ASSERT_NAMED(view, "pager");
+}
+
+static void test_a_host_widget_puts_each_object_child_where_it_names(void)
+{
+    register_pager();
+    lv_obj_t * pager = pager_with("<lv_obj name=\"one\"/><lv_label name=\"two\"/>");
+
+    lv_obj_t * strip = ASSERT_NAMED(pager, "strip");
+    TEST_ASSERT_EQUAL_UINT32(2, g_host_calls);
+    ASSERT_CHILD_COUNT(pager, 1);
+    ASSERT_CHILD_COUNT(strip, 2);
+    TEST_ASSERT_EQUAL_PTR(lv_obj_get_child(strip, 0), lv_obj_get_parent(ASSERT_NAMED(pager, "one")));
+    TEST_ASSERT_EQUAL_PTR(lv_obj_get_child(strip, 1), lv_obj_get_parent(ASSERT_NAMED(pager, "two")));
+}
+
+static void test_a_host_widgets_element_children_act_on_the_widget(void)
+{
+    register_pager();
+    lv_subject_t * s = helix_test_subject_int(0);
+    TEST_ASSERT_EQUAL(LV_RESULT_OK, lv_xml_register_subject(NULL, "pager_hide", s));
+
+    lv_obj_t * pager = pager_with("<bind_flag_if_eq subject=\"pager_hide\" flag=\"hidden\" ref_value=\"1\"/>");
+
+    TEST_ASSERT_EQUAL_UINT32(0, g_host_calls);
+    lv_subject_set_int(s, 1);
+    ASSERT_FLAG(pager, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void test_a_host_widgets_grandchildren_stay_with_their_parent(void)
+{
+    register_pager();
+    lv_obj_t * pager = pager_with("<lv_obj name=\"page\"><lv_label name=\"inside\"/></lv_obj>");
+
+    TEST_ASSERT_EQUAL_UINT32(1, g_host_calls);
+    TEST_ASSERT_EQUAL_PTR(ASSERT_NAMED(pager, "page"), lv_obj_get_parent(ASSERT_NAMED(pager, "inside")));
+}
+
+static void test_a_component_child_of_a_host_widget_goes_where_it_names(void)
+{
+    register_pager();
+    ASSERT_XML_REGISTERS("slot_plain", PLAIN);
+    lv_obj_t * pager = pager_with("<slot_plain name=\"p\"/>");
+
+    lv_obj_t * strip = ASSERT_NAMED(pager, "strip");
+    TEST_ASSERT_EQUAL_PTR(lv_obj_get_child(strip, 0), lv_obj_get_parent(ASSERT_NAMED(pager, "p")));
+}
+
+static void test_a_host_widget_naming_no_object_keeps_the_child(void)
+{
+    register_pager();
+    g_host_refuses = true;
+    lv_obj_t * pager = pager_with("<lv_obj name=\"one\"/>");
+
+    TEST_ASSERT_EQUAL_UINT32(1, g_host_calls);
+    TEST_ASSERT_EQUAL_PTR(pager, lv_obj_get_parent(ASSERT_NAMED(pager, "one")));
+}
+
+static void test_a_slot_targeting_a_host_widget_passes_its_content_on(void)
+{
+    register_pager();
+    ASSERT_XML_REGISTERS("pager_card",
+                         "<component><api><slot name=\"pages\" default=\"true\" target=\"pager\"/></api>"
+                         "<view name=\"card\"><test_pager name=\"pager\"/></view></component>");
+    ASSERT_XML_REGISTERS("pager_card_host",
+                         "<component><view name=\"host\">"
+                         "<pager_card name=\"c\"><lv_obj name=\"one\"/><lv_obj name=\"two\"/></pager_card>"
+                         "</view></component>");
+    lv_obj_t * view = XML_CREATE(helix_test_env_screen(), "pager_card_host", NULL);
+
+    lv_obj_t * strip = ASSERT_NAMED(view, "strip");
+    TEST_ASSERT_EQUAL_UINT32(2, g_host_calls);
+    ASSERT_CHILD_COUNT(strip, 2);
+    TEST_ASSERT_EQUAL_PTR(lv_obj_get_child(strip, 1), lv_obj_get_parent(ASSERT_NAMED(view, "two")));
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -376,6 +503,13 @@ int main(void)
 
     RUN_TEST(test_a_rebuilt_fragment_in_the_components_own_view_stays_where_it_was_built);
     RUN_TEST(test_a_slot_hosted_inside_another_slot_is_refused);
+
+    RUN_TEST(test_a_host_widget_puts_each_object_child_where_it_names);
+    RUN_TEST(test_a_host_widgets_element_children_act_on_the_widget);
+    RUN_TEST(test_a_host_widgets_grandchildren_stay_with_their_parent);
+    RUN_TEST(test_a_component_child_of_a_host_widget_goes_where_it_names);
+    RUN_TEST(test_a_host_widget_naming_no_object_keeps_the_child);
+    RUN_TEST(test_a_slot_targeting_a_host_widget_passes_its_content_on);
 
     return UNITY_END();
 }

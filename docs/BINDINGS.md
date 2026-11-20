@@ -266,7 +266,8 @@ that hosts content supplied by whoever instantiates it:
 ```
 
 `target` names the host object and defaults to the slot's own name. At most
-one slot is `default`.
+one slot is `default`. `hide_empty="true"` keeps the host hidden until the slot receives
+content, so an unused footer takes no room or flex gap.
 
 Filling them:
 

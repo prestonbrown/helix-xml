@@ -168,6 +168,29 @@ static void test_the_component_slot_form_fills_a_named_slot_at_its_target(void)
     TEST_ASSERT_EQUAL_PTR(ASSERT_NAMED(card, "body"), lv_obj_get_parent(ASSERT_NAMED(card, "mine")));
 }
 
+static const char * CARD_HIDE_EMPTY =
+    "<component>"
+    "  <api><slot name=\"footer\" hide_empty=\"true\"/></api>"
+    "  <view name=\"card_root\" flex_flow=\"column\">"
+    "    <lv_obj name=\"footer\"/>"
+    "  </view>"
+    "</component>";
+
+static void test_a_hide_empty_slot_is_hidden_until_it_is_filled(void)
+{
+    ASSERT_XML_REGISTERS("slot_hide_card", CARD_HIDE_EMPTY);
+    ASSERT_XML_REGISTERS("slot_hide_host",
+                         "<component><view name=\"host\">"
+                         "<slot_hide_card name=\"empty\"/>"
+                         "<slot_hide_card name=\"full\"><slot_hide_card-footer><lv_obj/></slot_hide_card-footer>"
+                         "</slot_hide_card>"
+                         "</view></component>");
+    lv_obj_t * view = XML_CREATE(helix_test_env_screen(), "slot_hide_host", NULL);
+
+    ASSERT_FLAG(ASSERT_NAMED(ASSERT_NAMED(view, "empty"), "footer"), LV_OBJ_FLAG_HIDDEN);
+    ASSERT_NO_FLAG(ASSERT_NAMED(ASSERT_NAMED(view, "full"), "footer"), LV_OBJ_FLAG_HIDDEN);
+}
+
 static void test_a_slot_tags_attributes_style_its_host(void)
 {
     ASSERT_XML_REGISTERS("slot_card", CARD);
@@ -299,6 +322,7 @@ int main(void)
     RUN_TEST(test_repeated_children_all_land_in_the_slot);
 
     RUN_TEST(test_the_component_slot_form_fills_a_named_slot_at_its_target);
+    RUN_TEST(test_a_hide_empty_slot_is_hidden_until_it_is_filled);
     RUN_TEST(test_a_slot_tags_attributes_style_its_host);
     RUN_TEST(test_a_slot_tag_cannot_rename_its_host);
     RUN_TEST(test_an_undeclared_slot_tag_with_a_named_object_still_resolves_and_warns);

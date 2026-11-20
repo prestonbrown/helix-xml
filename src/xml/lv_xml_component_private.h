@@ -141,6 +141,7 @@ typedef struct {
     const char * name;      /**< the slot's public name: `<comp-name>`, lv_xml_component_get_slot() */
     const char * target;    /**< name of the view object that hosts it; NULL means `name` */
     bool is_default;        /**< receives the instance's plain object children */
+    bool hide_empty;        /**< the host is hidden until the slot receives content */
 } lv_xml_slot_t;
 
 typedef struct {

@@ -204,6 +204,9 @@ void lv_xml_component_scope_instance_attach(lv_xml_component_scope_t * scope, lv
             LV_LOG_WARN("Component '%s' declares slot '%s', but its view has no object named '%s'",
                         scope->name ? scope->name : "?", slot->name, target);
         }
+        else if(slot->hide_empty) {
+            lv_obj_add_flag(host, LV_OBJ_FLAG_HIDDEN);
+        }
         inst->slot_hosts[i++] = host;
     }
 }
@@ -239,6 +242,16 @@ static int32_t slot_index(const lv_xml_component_scope_t * scope, const char * n
     return -1;
 }
 
+static lv_xml_slot_t * slot_at(lv_xml_component_scope_t * scope, int32_t index)
+{
+    int32_t i = 0;
+    lv_xml_slot_t * slot;
+    LV_LL_READ(&scope->slot_ll, slot) {
+        if(i++ == index) return slot;
+    }
+    return NULL;
+}
+
 /** The host for slot `index`, emptied of its default content the first time
  *  something is placed in it. */
 static lv_obj_t * take_slot(lv_xml_scope_instance_t * inst, int32_t index)
@@ -248,6 +261,7 @@ static lv_obj_t * take_slot(lv_xml_scope_instance_t * inst, int32_t index)
     if(index < 32 && !(inst->slot_filled & (1u << index))) {
         inst->slot_filled |= 1u << index;
         lv_obj_clean(host);
+        if(slot_at(inst->scope, index)->hide_empty) lv_obj_remove_flag(host, LV_OBJ_FLAG_HIDDEN);
     }
     return host;
 }
@@ -1947,6 +1961,8 @@ static void process_slot_element(lv_xml_parser_state_t * state, const char ** at
     const char * target = lv_xml_get_value_of(attrs, "target");
     slot->target = target ? lv_strdup(target) : NULL;
     slot->is_default = is_default;
+    const char * hide_empty = lv_xml_get_value_of(attrs, "hide_empty");
+    slot->hide_empty = hide_empty != NULL && lv_xml_to_bool(hide_empty);
     state->scope.slot_cnt++;
 }
 

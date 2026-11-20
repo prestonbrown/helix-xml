@@ -227,8 +227,8 @@ flag binding is about cost, not about reactivity:
 - `bind_flag_if … flag="hidden"` — the subtree is cheap and the condition
   changes often. You pay for both branches once and then only toggle.
 
-A cond may name the component's props through `${prop}`
-(`<if cond="${editing} eq 1">`). They are spliced in before the expression is
+A cond may name the component's props as `$prop` or `${prop}`
+(`<if cond="$editing eq 1">`). They are spliced in before the expression is
 compiled, so a cond over props alone is static and each instance builds the
 branch its own props ask for.
 

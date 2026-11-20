@@ -737,6 +737,34 @@ static void test_a_cond_over_a_prop_builds_the_branch_each_instance_asks_for(voi
     ASSERT_NO_NAMED(b, "form");
 }
 
+/*A `$prop` operand reads the same as `${prop}`: a value that starts with `$`
+ *and holds an expression is not one param name.*/
+static const char * COMP_BARE_PROP_COND =
+    "<component>"
+    "  <api><prop name=\"editing\" type=\"int\" default=\"0\"/></api>"
+    "  <view name=\"root\">"
+    "    <if cond=\"$editing eq 1\">"
+    "      <lv_obj name=\"form\"/>"
+    "    <else/>"
+    "      <lv_obj name=\"summary\"/>"
+    "    </if>"
+    "  </view>"
+    "</component>";
+
+static void test_a_bare_prop_operand_reads_like_a_braced_one(void)
+{
+    ASSERT_XML_REGISTERS("if_bare_prop_cond", COMP_BARE_PROP_COND);
+    const char * editing[] = {"editing", "1", NULL};
+    lv_obj_t * a = XML_CREATE(helix_test_env_screen(), "if_bare_prop_cond", editing);
+    lv_obj_t * b = XML_CREATE(helix_test_env_screen(), "if_bare_prop_cond", NULL);
+    helix_test_pump(30);
+
+    ASSERT_NAMED(a, "form");
+    ASSERT_NO_NAMED(a, "summary");
+    ASSERT_NAMED(b, "summary");
+    ASSERT_NO_NAMED(b, "form");
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -762,6 +790,7 @@ int main(void)
     RUN_TEST(test_unregister_while_the_instance_is_alive_keeps_the_cond_live);
     RUN_TEST(test_re_instantiation_does_not_accumulate_stale_observers);
     RUN_TEST(test_a_cond_over_a_prop_builds_the_branch_each_instance_asks_for);
+    RUN_TEST(test_a_bare_prop_operand_reads_like_a_braced_one);
 
     return UNITY_END();
 }

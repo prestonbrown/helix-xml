@@ -103,6 +103,7 @@ static void if_cond_changed_cb(void * record, int32_t value);
 static void xml_frag_record_free_heap(xml_frag_record_t * r);
 static void xml_frag_instance_delete_cb(lv_event_t * e);
 static bool xml_value_has_compose(const char * value);
+static char * xml_brace_bare_params(const char * value);
 static char * xml_compose_indexed(lv_xml_parser_state_t * state, const char * raw);
 static bool xml_state_track_string(lv_xml_parser_state_t * state, char * owned);
 static const char * xml_state_concat2(lv_xml_parser_state_t * state, const char * a, const char * b);
@@ -2118,6 +2119,32 @@ static bool xml_value_has_compose(const char * value)
     return false;
 }
 
+/** A copy of `value` with every bare `$name` written `${name}`, so the
+ *  composition path resolves it; `${...}` already braced is copied as is.
+ *  Caller frees. NULL when out of memory. */
+static char * xml_brace_bare_params(const char * value)
+{
+    size_t n = lv_strlen(value);
+    char * out = lv_malloc(n * 3 + 1); /*at worst every byte is a one-letter `$x`*/
+    if(out == NULL) return NULL;
+    size_t o = 0;
+    for(const char * p = value; *p; p++) {
+        out[o++] = *p;
+        if(*p != '$' || p[1] == '{') continue;
+        const char * q = p + 1;
+        if(!((*q >= 'A' && *q <= 'Z') || (*q >= 'a' && *q <= 'z') || *q == '_')) continue;
+        out[o++] = '{';
+        while((*q >= 'A' && *q <= 'Z') || (*q >= 'a' && *q <= 'z') || (*q >= '0' && *q <= '9') ||
+              *q == '_') {
+            out[o++] = *q++;
+        }
+        out[o++] = '}';
+        p = q - 1;
+    }
+    out[o] = '\0';
+    return out;
+}
+
 /** True if `s` parses fully as a base-10 integer: optional surrounding whitespace,
  *  optional sign, at least one digit, nothing else. Decides whether a component
  *  param may serve as a numeric `${expr}` operand. */
@@ -2504,10 +2531,16 @@ static void view_start_element_handler(void * user_data, const char * name, cons
         cap->active = true;
         cap->is_if = true;
         cap->base_depth = (uint32_t)lv_ll_get_len(&state->parent_ll);
-        /*`${prop}` in a cond resolves against this component's props before the
-         *expression is compiled, so a cond over props alone is static: each
-         *instance builds the branch its own props ask for, once.*/
-        if(cnd && xml_value_has_compose(cnd)) cnd = xml_compose_indexed(state, cnd);
+        /*`${prop}` or `$prop` in a cond resolves against this component's props
+         *before the expression is compiled, so a cond over props alone is static:
+         *each instance builds the branch its own props ask for, once.*/
+        if(cnd && lv_strchr(cnd, '$') != NULL) {
+            char * braced = xml_brace_bare_params(cnd);
+            if(braced != NULL) {
+                cnd = xml_compose_indexed(state, braced);
+                lv_free(braced);
+            }
+        }
         if(cnd) {
             size_t l = lv_strlen(cnd);
             cap->cond_raw = lv_malloc(l + 1);

@@ -85,9 +85,12 @@ static size_t lv_xml_parse_parts_attr(const char * parts_str, lv_style_selector_
  **********************/
 
 /* Expands to
-   if(lv_streq(prop_name, "style_height")) lv_obj_set_style_height(obj, value, selector)
- */
-#define SET_STYLE_IF(prop, value) if(lv_streq(prop_name, "style_" #prop)) lv_obj_set_style_##prop(obj, value, selector)
+   if(prop_name[6] == 'h' && lv_streq(prop_name + 6, "height")) lv_obj_set_style_height(obj, value, selector)
+   prop_name always starts with "style_" (apply_styles is reached only through
+   that prefix), so each test compares the suffix, and a first-letter miss, the
+   common case in this long chain, costs one byte compare. */
+#define SET_STYLE_IF(prop, value) \
+    if(prop_name[6] == (#prop)[0] && lv_streq(prop_name + 6, #prop)) lv_obj_set_style_##prop(obj, value, selector)
 
 /**********************
  *   GLOBAL FUNCTIONS
@@ -126,7 +129,11 @@ void lv_xml_obj_apply(lv_xml_parser_state_t * state, const char ** attrs)
             lv_obj_set_name(item, value);
         }
 #endif
-        if(lv_streq("x", name)) lv_obj_set_x(item, lv_xml_to_size(value));
+        /* Most attributes are styles, and none of lv_obj's own starts with
+         * "style_", so they skip the chain below. */
+        if(name_len > 6 && lv_memcmp("style_", name, 6) == 0 && apply_styles(state, item, name, value)) {
+        }
+        else if(lv_streq("x", name)) lv_obj_set_x(item, lv_xml_to_size(value));
         else if(lv_streq("y", name)) lv_obj_set_y(item, lv_xml_to_size(value));
         else if(lv_streq("width", name)) lv_obj_set_width(item, lv_xml_to_size(value));
         else if(lv_streq("height", name)) lv_obj_set_height(item, lv_xml_to_size(value));
@@ -262,8 +269,6 @@ void lv_xml_obj_apply(lv_xml_parser_state_t * state, const char ** attrs)
             }
         }
 
-        else if(name_len > 6 && lv_memcmp("style_", name, 6) == 0 && apply_styles(state, item, name, value)) {
-        }
         /* Not one of lv_obj's own. Recorded, not warned: the widget-specific
          * chain that called this one gets its turn next, and only an attribute
          * that EVERY chain missed is a typo. */

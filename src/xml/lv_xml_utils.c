@@ -119,6 +119,8 @@ lv_opa_t lv_xml_to_opa(const char * str)
      *scaled the result by 255/100. Same hardening lv_xml_to_size() already has
      *(#1121).*/
     if(str == NULL || str[0] == '\0') return 0;
+    if(lv_streq(str, "cover")) return LV_OPA_COVER;
+    if(lv_streq(str, "transp")) return LV_OPA_TRANSP;
 
     int32_t v = lv_xml_atoi(str);
     size_t len = lv_strlen(str);

@@ -504,9 +504,12 @@ static void test_to_opa_returns_zero_for_malformed_input(void)
 {
     TEST_ASSERT_EQUAL_UINT8(0, lv_xml_to_opa("abc"));
     TEST_ASSERT_EQUAL_UINT8(0, lv_xml_to_opa("%"));
-    /* Symbolic opacity names are NOT supported - they parse as 0. */
+}
+
+static void test_to_opa_reads_cover_and_transp(void)
+{
+    TEST_ASSERT_EQUAL_UINT8(255, lv_xml_to_opa("cover"));
     TEST_ASSERT_EQUAL_UINT8(0, lv_xml_to_opa("transp"));
-    TEST_ASSERT_EQUAL_UINT8(0, lv_xml_to_opa("cover"));
 }
 
 /**
@@ -845,6 +848,7 @@ int main(void)
     RUN_TEST(test_to_opa_accepts_percentages);
     RUN_TEST(test_to_opa_clamps_out_of_range_values);
     RUN_TEST(test_to_opa_returns_zero_for_malformed_input);
+    RUN_TEST(test_to_opa_reads_cover_and_transp);
     RUN_TEST(test_to_opa_empty_string_does_not_read_the_byte_before_it);
     RUN_TEST(test_to_opa_guards_null_and_empty);
 

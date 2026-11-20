@@ -2504,6 +2504,10 @@ static void view_start_element_handler(void * user_data, const char * name, cons
         cap->active = true;
         cap->is_if = true;
         cap->base_depth = (uint32_t)lv_ll_get_len(&state->parent_ll);
+        /*`${prop}` in a cond resolves against this component's props before the
+         *expression is compiled, so a cond over props alone is static: each
+         *instance builds the branch its own props ask for, once.*/
+        if(cnd && xml_value_has_compose(cnd)) cnd = xml_compose_indexed(state, cnd);
         if(cnd) {
             size_t l = lv_strlen(cnd);
             cap->cond_raw = lv_malloc(l + 1);

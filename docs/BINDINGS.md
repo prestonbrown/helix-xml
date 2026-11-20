@@ -214,6 +214,11 @@ flag binding is about cost, not about reactivity:
 - `bind_flag_if … flag="hidden"` — the subtree is cheap and the condition
   changes often. You pay for both branches once and then only toggle.
 
+A cond may name the component's props through `${prop}`
+(`<if cond="${editing} eq 1">`). They are spliced in before the expression is
+compiled, so a cond over props alone is static and each instance builds the
+branch its own props ask for.
+
 `<else/>` is optional: a false cond with no else builds nothing and still loads.
 Covered by `test_if_else.c`, including
 `test_reactive_cond_flips_the_built_branch_both_ways`.

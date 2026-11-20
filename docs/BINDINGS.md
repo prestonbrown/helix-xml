@@ -284,7 +284,9 @@ Filling them:
   they always did.
 - **Elements stay on the instance.** `bind_*`, `event_cb`, `style` and the other
   `<widget>-<element>` processors act on the instance root wherever they sit.
-- **`<component-slot>` fills a named slot.** Its children go to that slot's host.
+- **`<component-slot>` fills a named slot.** Its children go to that slot's host. Its attributes style the host as they would an `<lv_obj>`
+  (`<card-footer flex_flow="row" style_pad_all="#space_md">`); `name` is ignored, so
+  the host keeps the name its component knows it by.
 - **Default content.** Whatever the view puts in a host shows until the slot
   receives content, and is removed then.
 - **`extends`.** A component whose view extends a slotted component fills the

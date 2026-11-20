@@ -168,6 +168,26 @@ static void test_the_component_slot_form_fills_a_named_slot_at_its_target(void)
     TEST_ASSERT_EQUAL_PTR(ASSERT_NAMED(card, "body"), lv_obj_get_parent(ASSERT_NAMED(card, "mine")));
 }
 
+static void test_a_slot_tags_attributes_style_its_host(void)
+{
+    ASSERT_XML_REGISTERS("slot_card", CARD);
+    lv_obj_t * card = card_with(
+                          "<slot_card-footer style_pad_left=\"7\" flex_flow=\"row\"><lv_obj name=\"x\"/></slot_card-footer>");
+
+    lv_obj_t * footer = ASSERT_NAMED(card, "footer_row");
+    ASSERT_STYLE_INT(footer, LV_STYLE_PAD_LEFT, LV_PART_MAIN, 7);
+    TEST_ASSERT_EQUAL(LV_FLEX_FLOW_ROW, lv_obj_get_style_flex_flow(footer, LV_PART_MAIN));
+}
+
+static void test_a_slot_tag_cannot_rename_its_host(void)
+{
+    ASSERT_XML_REGISTERS("slot_card", CARD);
+    lv_obj_t * card = card_with("<slot_card-footer name=\"renamed\"><lv_obj/></slot_card-footer>");
+
+    ASSERT_NAMED(card, "footer_row");
+    ASSERT_NO_NAMED(card, "renamed");
+}
+
 static void test_an_undeclared_slot_tag_with_a_named_object_still_resolves_and_warns(void)
 {
     ASSERT_XML_REGISTERS("slot_card", CARD);
@@ -279,6 +299,8 @@ int main(void)
     RUN_TEST(test_repeated_children_all_land_in_the_slot);
 
     RUN_TEST(test_the_component_slot_form_fills_a_named_slot_at_its_target);
+    RUN_TEST(test_a_slot_tags_attributes_style_its_host);
+    RUN_TEST(test_a_slot_tag_cannot_rename_its_host);
     RUN_TEST(test_an_undeclared_slot_tag_with_a_named_object_still_resolves_and_warns);
     RUN_TEST(test_a_slot_tag_naming_nothing_reports_the_slot_not_a_stale_binary);
 

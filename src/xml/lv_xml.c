@@ -108,6 +108,7 @@ static bool xml_state_track_string(lv_xml_parser_state_t * state, char * owned);
 static const char * xml_state_concat2(lv_xml_parser_state_t * state, const char * a, const char * b);
 static void xml_state_free_composed(lv_xml_parser_state_t * state);
 static void destroy_partial_view(lv_xml_parser_state_t * state, lv_obj_t * parent, uint32_t children_before);
+static void apply_slot_tag_attrs(lv_xml_parser_state_t * state, const char ** attrs);
 static void create_timeline_instances(lv_xml_parser_state_t * state);
 static void get_timeline_from_event_cb(lv_event_t * e);
 static void free_timelines_event_cb(lv_event_t * e);
@@ -2380,6 +2381,34 @@ static void xml_state_free_composed(lv_xml_parser_state_t * state)
  * `parent == NULL` is the screen case: nothing was appended to a parent, so the
  * only thing to reclaim is the orphan screen in `state->view`.
  */
+/** Attributes on a `<component-slot>` tag style the slot's host (state->item),
+ *  as they would on an `<lv_obj>`: a caller shapes the container it fills -
+ *  padding, flex flow, scrolling - without restating it. `name` is dropped, so
+ *  the host keeps the name the component and its host code look it up by. */
+static void apply_slot_tag_attrs(lv_xml_parser_state_t * state, const char ** attrs)
+{
+    if(attrs == NULL || attrs[0] == NULL) return;
+    uint32_t n = 0;
+    while(attrs[n]) n++;
+    const char ** kept = lv_malloc(sizeof(const char *) * (n + 1));
+    if(kept == NULL) {
+        LV_LOG_ERROR("OOM: slot tag attributes on '%s' not applied", state->tag_name ? state->tag_name : "?");
+        return;
+    }
+    uint32_t k = 0;
+    for(uint32_t i = 0; i < n; i += 2) {
+        if(lv_streq(attrs[i], "name")) continue;
+        kept[k++] = attrs[i];
+        kept[k++] = attrs[i + 1];
+    }
+    kept[k] = NULL;
+    if(k > 0) {
+        lv_widget_processor_t * obj_proc = lv_xml_widget_get_processor("lv_obj");
+        if(obj_proc) obj_proc->apply_cb(state, kept);
+    }
+    lv_free(kept);
+}
+
 static void destroy_partial_view(lv_xml_parser_state_t * state, lv_obj_t * parent, uint32_t children_before)
 {
     if(parent == NULL) {
@@ -2624,6 +2653,7 @@ static void view_start_element_handler(void * user_data, const char * name, cons
                                     comp_name, slot_name, slot_name);
                     }
                 }
+                if(state->item) apply_slot_tag_attrs(state, attrs);
                 if(state->item == NULL) {
                     LV_LOG_ERROR("<%s>: component '%s' has no slot '%s'%s. Its children are attached to "
                                  "the enclosing parent instead.",

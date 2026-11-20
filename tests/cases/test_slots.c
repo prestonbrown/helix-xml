@@ -310,6 +310,45 @@ static void test_a_slot_whose_target_is_missing_warns_at_creation(void)
     TEST_ASSERT_NULL(lv_xml_component_get_slot(r, NULL));
 }
 
+/*---------------------------------------------------------------------------
+ * Rebuilds and nesting
+ *--------------------------------------------------------------------------*/
+
+static void test_a_rebuilt_fragment_in_the_components_own_view_stays_where_it_was_built(void)
+{
+    lv_subject_t * s = helix_test_subject_int(1);
+    TEST_ASSERT_EQUAL(LV_RESULT_OK, lv_xml_register_subject(NULL, "slot_frag_on", s));
+    ASSERT_XML_REGISTERS("slot_self_frag",
+                         "<component><api><slot name=\"body\" default=\"true\"/></api>"
+                         "<view name=\"r\"><lv_obj name=\"body\"/>"
+                         "<if cond=\"slot_frag_on eq 1\"><lv_obj name=\"frag\"/></if>"
+                         "</view></component>");
+    lv_obj_t * r = XML_CREATE(helix_test_env_screen(), "slot_self_frag", NULL);
+    helix_test_pump(30);
+    TEST_ASSERT_EQUAL_PTR(r, lv_obj_get_parent(ASSERT_NAMED(r, "frag")));
+
+    lv_subject_set_int(s, 0);
+    helix_test_pump(30);
+    lv_subject_set_int(s, 1);
+    helix_test_pump(30);
+    TEST_ASSERT_EQUAL_PTR(r, lv_obj_get_parent(ASSERT_NAMED(r, "frag")));
+}
+
+static void test_a_slot_hosted_inside_another_slot_is_refused(void)
+{
+    ASSERT_XML_REGISTERS("slot_nested",
+                         "<component><api><slot name=\"outer\" default=\"true\"/><slot name=\"inner\"/></api>"
+                         "<view name=\"r\"><lv_obj name=\"outer\"><lv_obj name=\"inner\"/></lv_obj></view>"
+                         "</component>");
+    log_capture_start();
+    lv_obj_t * r = XML_CREATE(helix_test_env_screen(), "slot_nested", NULL);
+    log_capture_stop();
+
+    TEST_ASSERT_NOT_NULL(lv_xml_component_get_slot(r, "outer"));
+    TEST_ASSERT_NULL(lv_xml_component_get_slot(r, "inner"));
+    TEST_ASSERT_TRUE_MESSAGE(log_contains("inside slot 'outer'"), g_log_buf);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -334,6 +373,9 @@ int main(void)
     RUN_TEST(test_host_code_gets_each_declared_slot_by_name);
     RUN_TEST(test_host_code_reaches_an_extended_components_slot);
     RUN_TEST(test_a_slot_whose_target_is_missing_warns_at_creation);
+
+    RUN_TEST(test_a_rebuilt_fragment_in_the_components_own_view_stays_where_it_was_built);
+    RUN_TEST(test_a_slot_hosted_inside_another_slot_is_refused);
 
     return UNITY_END();
 }

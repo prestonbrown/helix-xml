@@ -209,6 +209,32 @@ void lv_xml_component_scope_instance_attach(lv_xml_component_scope_t * scope, lv
         }
         inst->slot_hosts[i++] = host;
     }
+
+    /*A host inside another slot's host would be deleted by that slot's first
+     *fill, leaving a dangling pointer here, so it is refused.*/
+    i = 0;
+    LV_LL_READ(&scope->slot_ll, slot) {
+        lv_obj_t * host = inst->slot_hosts[i];
+        uint32_t j = 0;
+        lv_xml_slot_t * outer;
+        LV_LL_READ(&scope->slot_ll, outer) {
+            lv_obj_t * outer_host = inst->slot_hosts[j];
+            if(host && outer_host && j != i && host != outer_host) {
+                for(lv_obj_t * p = lv_obj_get_parent(host); p; p = lv_obj_get_parent(p)) {
+                    if(p == outer_host) {
+                        LV_LOG_WARN("Component '%s': slot '%s' is inside slot '%s', whose first fill would "
+                                    "delete it; slot '%s' is disabled",
+                                    scope->name ? scope->name : "?", slot->name, outer->name, slot->name);
+                        inst->slot_hosts[i] = NULL;
+                        host = NULL;
+                        break;
+                    }
+                }
+            }
+            j++;
+        }
+        i++;
+    }
 }
 
 /** The instance record on `obj` that routes its children: the most recently
@@ -216,7 +242,7 @@ void lv_xml_component_scope_instance_attach(lv_xml_component_scope_t * scope, lv
  *  component that `extends` another is one view root with both scopes'
  *  records, the extended one attached first - so the newest wins, and an
  *  extender that declares no slots of its own passes the extended ones on. */
-static lv_xml_scope_instance_t * slotted_instance_of(lv_obj_t * obj)
+static lv_xml_scope_instance_t * slotted_instance_of(lv_obj_t * obj, const char * parsing_scope)
 {
     if(obj == NULL) return NULL;
     uint32_t n = lv_obj_get_event_count(obj);
@@ -224,7 +250,13 @@ static lv_xml_scope_instance_t * slotted_instance_of(lv_obj_t * obj)
         lv_event_dsc_t * dsc = lv_obj_get_event_dsc(obj, i - 1);
         if(dsc == NULL || lv_event_dsc_get_cb(dsc) != scope_instance_delete_cb) continue;
         lv_xml_scope_instance_t * inst = lv_event_dsc_get_user_data(dsc);
-        if(inst && inst->slot_hosts) return inst;
+        if(inst == NULL || inst->slot_hosts == NULL) continue;
+        /*A component never fills its own slots from its own view. Its record is
+         *attached only after that view is parsed, so the first build could not
+         *see it; skipping it here keeps a <repeat>/<if> rebuilt later in the
+         *same place, and leaves an extending view filling the extended slots.*/
+        if(parsing_scope && inst->scope->name && lv_streq(inst->scope->name, parsing_scope)) continue;
+        return inst;
     }
     return NULL;
 }
@@ -266,9 +298,9 @@ static lv_obj_t * take_slot(lv_xml_scope_instance_t * inst, int32_t index)
     return host;
 }
 
-lv_obj_t * lv_xml_component_route_child(lv_obj_t * parent)
+lv_obj_t * lv_xml_component_route_child(lv_obj_t * parent, const char * parsing_scope)
 {
-    lv_xml_scope_instance_t * inst = slotted_instance_of(parent);
+    lv_xml_scope_instance_t * inst = slotted_instance_of(parent, parsing_scope);
     if(inst == NULL) return parent;
     int32_t index = slot_index(inst->scope, NULL);
     if(index < 0) return parent;
@@ -276,10 +308,11 @@ lv_obj_t * lv_xml_component_route_child(lv_obj_t * parent)
     return host ? host : parent;
 }
 
-lv_obj_t * lv_xml_component_fill_slot(lv_obj_t * parent, const char * slot_name, bool * declared)
+lv_obj_t * lv_xml_component_fill_slot(lv_obj_t * parent, const char * slot_name,
+                                      const char * parsing_scope, bool * declared)
 {
     *declared = false;
-    lv_xml_scope_instance_t * inst = slotted_instance_of(parent);
+    lv_xml_scope_instance_t * inst = slotted_instance_of(parent, parsing_scope);
     if(inst == NULL) return NULL;
     int32_t index = slot_index(inst->scope, slot_name);
     if(index < 0) return NULL;
@@ -289,7 +322,7 @@ lv_obj_t * lv_xml_component_fill_slot(lv_obj_t * parent, const char * slot_name,
 
 lv_obj_t * lv_xml_component_get_slot(lv_obj_t * obj, const char * slot_name)
 {
-    lv_xml_scope_instance_t * inst = slotted_instance_of(obj);
+    lv_xml_scope_instance_t * inst = slotted_instance_of(obj, NULL);
     if(inst == NULL) return NULL;
     int32_t index = slot_index(inst->scope, slot_name);
     return index < 0 ? NULL : inst->slot_hosts[index];
@@ -569,6 +602,12 @@ lv_result_t lv_xml_register_component_from_data(const char * name, const char * 
         }
         else {
             lv_free((char *)state.scope.extends);
+            lv_xml_slot_t * slot;
+            LV_LL_READ(&state.scope.slot_ll, slot) {
+                lv_free((char *)slot->name);
+                lv_free((char *)slot->target);
+            }
+            lv_ll_clear(&state.scope.slot_ll);
         }
         return LV_RESULT_INVALID;
     }

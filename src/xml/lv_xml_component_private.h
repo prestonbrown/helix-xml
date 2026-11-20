@@ -289,8 +289,10 @@ void lv_xml_component_scope_instance_attach(lv_xml_component_scope_t * scope, lv
  * Where an object-creating child of `parent` goes while a view is parsed: the
  * default slot's host when `parent` is a component instance that declares one,
  * otherwise `parent`. The slot's default content is removed on the first child.
+ * `parsing_scope` names the component whose view is being parsed: its own
+ * slots are never the target.
  */
-lv_obj_t * lv_xml_component_route_child(lv_obj_t * parent);
+lv_obj_t * lv_xml_component_route_child(lv_obj_t * parent, const char * parsing_scope);
 
 /**
  * The host of slot `slot_name` on the instance `parent`, for a `<comp-slot>`
@@ -298,7 +300,8 @@ lv_obj_t * lv_xml_component_route_child(lv_obj_t * parent);
  * the caller can tell an undeclared name from a declared slot whose target is
  * missing. Removes the slot's default content.
  */
-lv_obj_t * lv_xml_component_fill_slot(lv_obj_t * parent, const char * slot_name, bool * declared);
+lv_obj_t * lv_xml_component_fill_slot(lv_obj_t * parent, const char * slot_name, const char * parsing_scope,
+                                      bool * declared);
 
 /**
  * Detach the observer and free the retained body/snapshots of a subject-bound

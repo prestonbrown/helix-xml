@@ -2597,7 +2597,7 @@ static void view_start_element_handler(void * user_data, const char * name, cons
      * component, which has already routed it. */
     if(!is_view) {
         bool creates_object = p ? lv_strchr(p->name, '-') == NULL : lv_xml_component_get_scope(name) != NULL;
-        if(creates_object) state->parent = lv_xml_component_route_child(state->parent);
+        if(creates_object) state->parent = lv_xml_component_route_child(state->parent, state->scope.name);
     }
 
     if(p) {
@@ -2646,7 +2646,7 @@ static void view_start_element_handler(void * user_data, const char * name, cons
             if(comp_scope && lv_streq(comp_name, comp_scope->name)) {
                 is_slot_tag = true;
                 bool declared = false;
-                state->item = lv_xml_component_fill_slot(state->parent, slot_name, &declared);
+                state->item = lv_xml_component_fill_slot(state->parent, slot_name, state->scope.name, &declared);
                 if(state->item == NULL && !declared) {
                     /* Not a declared slot: fill the object of that name, which
                      * is all this form meant before slots were declared. */
